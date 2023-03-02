@@ -1,0 +1,16 @@
+name = "rss-doge"
+account_id = "192f419a98de6d7213ce83e0fcf04e51"
+workers_dev = true
+main = "src/index.js"
+compatibility_date = "2023-02-28"
+
+kv_namespaces = [
+    { binding = "RSSDOGE", id = "76fc30a6d6d148d5be413382baa29228", preview_id = "73297cedbf154a03972f47fc4baabd6a" }
+]
+
+[vars]
+FEEDS = '{"netsec":"https://reddit.com/r/netsec.rss","opennet":"https://www.opennet.ru/opennews/opennews_sec.rss","engineering_meta":"https://engineering.fb.com/feed/","googleonlinesecurity":"http://feeds.feedburner.com/GoogleOnlineSecurityBlog","googleprojectzero":"https://googleprojectzero.blogspot.com/feeds/posts/default","rapid7":"https://blog.rapid7.com/rss/","stackexchange-appsec":"https://security.stackexchange.com/feeds/tag/appsec","tavis-ormandy":"http://blog.cmpxchg8b.com/feeds/posts/default","brycx":"https://brycx.github.io/feed.xml"}'
+TELEGRAM_CHANNEL = '@owsecurity'
+
+[triggers]
+crons = ["0 10 * * mon-fri", "0 14 * * mon-fri", "0 20 * * mon-sun"]

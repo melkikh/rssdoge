@@ -1,0 +1,16 @@
+{
+  "private": true,
+  "name": "rssdoge",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "format": "prettier --write '**/*.{js,css,json,md}'"
+  },
+  "author": "melkikh <melkih.a.a@gmail.com>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@extractus/feed-extractor": "^6.2.1"
+  }
+}
