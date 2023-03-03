@@ -94,14 +94,33 @@ async function handleScheduled(event) {
 async function fetchFeed(url, since, tag) {
   console.log(`[fetchFeed] start to fetch feed: ${url} since ${since}`);
 
-  const response = await extract(url);
+  const response = await extract(url, {
+    xmlParserOptions: {
+      ignoreAttributes: false,
+      attributeNamePrefix: "@_",
+    },
+    getExtraEntryFields: (feedEntry) => {
+      const { link } = feedEntry;
+      return {
+        links: Array.isArray(link)
+          ? link.reduce((acc, cur) => {
+              if (cur["@_rel"] === "alternate") {
+                return [...acc, cur["@_href"]];
+              }
+              return acc
+            }, [])
+          : [],
+      };
+    },
+  });
+
   const posts = [];
   for (let item of response.entries) {
     const postDate = new Date(item.published);
     if (postDate > since) {
       posts.push({
         title: item.title,
-        link: item.link,
+        link: item.links.length > 0 ? item.links[0] : item.link,
         date: item.published,
         tag: tag,
       });
