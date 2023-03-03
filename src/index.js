@@ -2,12 +2,42 @@ import { extract } from "@extractus/feed-extractor";
 import Telegram from "./telegram";
 
 addEventListener("fetch", (event) => {
-  event.respondWith(handleRequest(event.request));
+  event.respondWith(handleRequest(event));
 });
 
-async function handleRequest(request) {
-  const since = await RSSDOGE.get("last-update-date");
-  return new Response(`Last update was at ${since}`, { status: 200 });
+async function handleRequest(event) {
+  const request = event.request;
+  const path = new URL(request.url).pathname;
+
+  let lastUpdate;
+  if (path === "/") {
+    lastUpdate = await RSSDOGE.get("last-update-date");
+  } else if (path === "/refresh" && request.method.toUpperCase() === "POST") {
+    try {
+      authenticate(request);
+    } catch (error) {
+      return new Response(error, { status: 401 });
+    }
+    lastUpdate = await handleScheduled(event);
+  } else {
+    return new Response(`Not found`, { status: 404 });
+  }
+
+  return new Response(`Feed was refreshed at ${lastUpdate}`, { status: 200 });
+}
+
+function authenticate(request) {
+  const authzHeader = request.headers.get("Authorization");
+  if (authzHeader === null) {
+    throw "There is no Authorization header";
+  }
+
+  const [tokenType, tokenValue] = authzHeader.split(" ", 2);
+  if (tokenType === "Bearer" && tokenValue === TELEGRAM_TOKEN) {
+    return;
+  } else {
+    throw "Invalid Authorization header";
+  }
 }
 
 addEventListener("scheduled", (event) => {
@@ -58,10 +88,12 @@ async function handleScheduled(event) {
   }
 
   await RSSDOGE.put("last-update-date", now.toISOString());
+  return now;
 }
 
 async function fetchFeed(url, since, tag) {
   console.log(`[fetchFeed] start to fetch feed: ${url} since ${since}`);
+
   const response = await extract(url);
   const posts = [];
   for (let item of response.entries) {
