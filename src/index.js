@@ -1,5 +1,6 @@
-import { extract } from "@extractus/feed-extractor";
 import Telegram from "./telegram";
+import { config } from "./config";
+import { extract } from "@extractus/feed-extractor";
 
 addEventListener("fetch", (event) => {
   event.respondWith(handleRequest(event));
@@ -33,7 +34,7 @@ function authenticate(request) {
   }
 
   const [tokenType, tokenValue] = authzHeader.split(" ", 2);
-  if (tokenType === "Bearer" && tokenValue === TELEGRAM_TOKEN) {
+  if (tokenType === "Bearer" && tokenValue === config["telegramToken"]) {
     return;
   } else {
     throw "Invalid Authorization header";
@@ -48,10 +49,10 @@ async function handleScheduled(event) {
   const sinceRaw = await RSSDOGE.get("last-update-date");
   const sinceDate = sinceRaw !== null ? new Date(sinceRaw) : new Date(0);
   const now = new Date();
-  const feeds = JSON.parse(FEEDS);
+  const feeds = config["feeds"];
   const bot = new Telegram({
-    token: TELEGRAM_TOKEN,
-    chatID: TELEGRAM_CHANNEL,
+    token: config["telegramToken"],
+    chatID: config["telegramChatID"],
   });
 
   const content = [];
@@ -107,7 +108,7 @@ async function fetchFeed(url, since, tag) {
               if (cur["@_rel"] === "alternate") {
                 return [...acc, cur["@_href"]];
               }
-              return acc
+              return acc;
             }, [])
           : [],
       };
