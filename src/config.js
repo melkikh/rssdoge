@@ -13,7 +13,8 @@ export const config = {
       tavis_ormandy: "http://blog.cmpxchg8b.com/feeds/posts/default",
       brycx: "https://brycx.github.io/feed.xml",
       tailscale: "https://tailscale.com/blog/index.xml",
-      datadog_security: "https://securitylabs.datadoghq.com/rss/feed.xml"
+      datadog_security: "https://securitylabs.datadoghq.com/rss/feed.xml",
+      patryk_kosieradzki: "https://patrykkosieradzki.medium.com/feed"
     },
   },
   development: {
