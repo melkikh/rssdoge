@@ -12,6 +12,8 @@ export const config = {
       stackexchange_appsec: "https://security.stackexchange.com/feeds/tag/appsec",
       tavis_ormandy: "http://blog.cmpxchg8b.com/feeds/posts/default",
       brycx: "https://brycx.github.io/feed.xml",
+      tailscale: "https://tailscale.com/blog/index.xml",
+      datadog_security: "https://securitylabs.datadoghq.com/rss/feed.xml"
     },
   },
   development: {
