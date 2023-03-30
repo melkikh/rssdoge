@@ -14,7 +14,8 @@ export const config = {
       brycx: "https://brycx.github.io/feed.xml",
       tailscale: "https://tailscale.com/blog/index.xml",
       datadog_security: "https://securitylabs.datadoghq.com/rss/feed.xml",
-      patryk_kosieradzki: "https://patrykkosieradzki.medium.com/feed"
+      patryk_kosieradzki: "https://patrykkosieradzki.medium.com/feed",
+      github_security: "https://github.blog/category/security/feed"
     },
   },
   development: {
