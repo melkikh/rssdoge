@@ -15,7 +15,9 @@ export const config = {
       tailscale: "https://tailscale.com/blog/index.xml",
       datadog_security: "https://securitylabs.datadoghq.com/rss/feed.xml",
       patryk_kosieradzki: "https://patrykkosieradzki.medium.com/feed",
-      github_security: "https://github.blog/category/security/feed"
+      github_security: "https://github.blog/category/security/feed",
+      microsoft_engineering: "https://devblogs.microsoft.com/engineering-at-microsoft/feed/",
+      microsoft_entra: "https://devblogs.microsoft.com/identity/feed/",
     },
   },
   development: {
