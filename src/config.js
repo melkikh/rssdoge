@@ -18,6 +18,15 @@ export const config = {
       github_security: "https://github.blog/category/security/feed",
       microsoft_engineering: "https://devblogs.microsoft.com/engineering-at-microsoft/feed/",
       microsoft_entra: "https://devblogs.microsoft.com/identity/feed/",
+      microsoft_defender_for_cloud: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=MicrosoftDefenderCloudBlog&size=25&label=Cloud%20Security%20Posture%20Management",
+      microsoft_security: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=MicrosoftSecurityandCompliance&size=25",
+      microsoft_core_infra_security: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=CoreInfrastructureandSecurityBlog&size=25",
+      microsoft_network_security: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=AzureNetworkSecurityBlog&size=25",
+      microsoft_defender_for_endpoint: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=MicrosoftDefenderATPBlog&size=25",
+      microsoft_entra: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=Identity&size=25",
+      microsoft_sentinel: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=MicrosoftSentinelBlog&size=25",
+      microsoft_vulnmanagement: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=Vulnerability-Management&size=25",
+      microsoft_identity: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=IdentityStandards&size=25"
     },
   },
   development: {
