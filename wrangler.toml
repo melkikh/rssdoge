@@ -12,4 +12,4 @@ kv_namespaces = [
 ENV='production'
 
 [triggers]
-crons = ["0 10 * * mon-fri", "0 14 * * mon-fri", "0 20 * * mon-sun"]
+crons = ["0 9,11,17 * * mon-fri"]
