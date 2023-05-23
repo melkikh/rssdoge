@@ -26,7 +26,8 @@ export const config = {
       microsoft_entra: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=Identity&size=25",
       microsoft_sentinel: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=MicrosoftSentinelBlog&size=25",
       microsoft_vulnmanagement: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=Vulnerability-Management&size=25",
-      microsoft_identity: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=IdentityStandards&size=25"
+      microsoft_identity: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=IdentityStandards&size=25",
+      doyensec: "https://blog.doyensec.com/atom.xml",
     },
   },
   development: {
