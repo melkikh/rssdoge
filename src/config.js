@@ -28,6 +28,8 @@ export const config = {
       microsoft_vulnmanagement: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=Vulnerability-Management&size=25",
       microsoft_identity: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=IdentityStandards&size=25",
       doyensec: "https://blog.doyensec.com/atom.xml",
+      github_security_changelog: "https://github.blog/changelog/label/advanced-security/feed/",
+      github_advanced_security_changelog: "https://github.blog/changelog/label/security/feed/",
     },
   },
   development: {
