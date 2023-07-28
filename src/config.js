@@ -30,6 +30,8 @@ export const config = {
       doyensec: "https://blog.doyensec.com/atom.xml",
       github_security_changelog: "https://github.blog/changelog/label/advanced-security/feed/",
       github_advanced_security_changelog: "https://github.blog/changelog/label/security/feed/",
+      openai: "https://openai.com/blog/rss.xml",
+      trailofbits: "https://blog.trailofbits.com/feed/",
     },
   },
   development: {
