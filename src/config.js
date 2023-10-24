@@ -32,6 +32,7 @@ export const config = {
       github_advanced_security_changelog: "https://github.blog/changelog/label/security/feed/",
       openai: "https://openai.com/blog/rss.xml",
       trailofbits: "https://blog.trailofbits.com/feed/",
+      miro_engineering: "https://medium.com/feed/miro-engineering",
     },
   },
   development: {
