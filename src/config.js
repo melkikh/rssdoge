@@ -33,6 +33,7 @@ export const config = {
       openai: "https://openai.com/blog/rss.xml",
       trailofbits: "https://blog.trailofbits.com/feed/",
       miro_engineering: "https://medium.com/feed/miro-engineering",
+      raesene: "https://raesene.github.io/feed.xml" 
     },
   },
   development: {
