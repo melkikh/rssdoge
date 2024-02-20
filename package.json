@@ -11,6 +11,7 @@
   "author": "melkikh <melkih.a.a@gmail.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@extractus/feed-extractor": "^6.2.1"
+    "@extractus/feed-extractor": "github:extractus/feed-extractor",
+    "wrangler": "^3.28.3"
   }
 }
