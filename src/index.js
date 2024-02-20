@@ -55,7 +55,7 @@ async function processEvent(event) {
     chatID: config["telegramChatID"],
   });
 
-  const content = [];
+  let content = [];
   for (const [tag, url] of Object.entries(feeds)) {
     try {
       items = await fetchFeed(url, sinceDate, tag);
