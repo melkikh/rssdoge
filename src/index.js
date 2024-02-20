@@ -34,7 +34,10 @@ function authenticate(request) {
   }
 
   const [tokenType, tokenValue] = authzHeader.split(" ", 2);
-  if (tokenType === "Bearer" && tokenValue === config["telegramToken"]) {
+  if (
+    tokenType === "Bearer" &&
+    crypto.subtle.timingSafeEqual(tokenValue, config["telegramToken"])
+  ) {
     return;
   } else {
     throw "Invalid Authorization header";
