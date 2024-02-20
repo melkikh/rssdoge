@@ -17,7 +17,7 @@ async function handleRequest(event) {
     try {
       authenticate(request);
     } catch (error) {
-      return new Response(error, { status: 401 });
+      return new Response(error.message, { status: 401 });
     }
     lastUpdate = await processEvent(event);
   } else {
@@ -34,9 +34,15 @@ function authenticate(request) {
   }
 
   const [tokenType, tokenValue] = authzHeader.split(" ", 2);
+
+  const encoder = new TextEncoder();
+  const configToken = encoder.encode(config["telegramToken"]);
+  const requestToken = encoder.encode(tokenValue);
+
   if (
     tokenType === "Bearer" &&
-    crypto.subtle.timingSafeEqual(tokenValue, config["telegramToken"])
+    configToken.byteLength == requestToken.byteLength &&
+    crypto.subtle.timingSafeEqual(configToken, requestToken)
   ) {
     return;
   } else {
@@ -134,9 +140,18 @@ async function fetchFeed(url, since, tag) {
   return posts;
 }
 
-function uniquePosts(array, key) {
-  const unique = [...new Set(array.map((item) => item[key]))];
-  return unique;
+function uniquePosts(posts, key) {
+  const uniqueKeys = new Set();
+  const uniquePosts = [];
+
+  for (const post of posts) {
+    if (!uniqueKeys.has(post[key])) {
+      uniqueKeys.add(post[key]);
+      uniquePosts.push(post);
+    }
+  }
+
+  return uniquePosts;
 }
 
 function createPostMarkdown(post) {

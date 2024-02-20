@@ -4,12 +4,14 @@ workers_dev = true
 main = "src/index.js"
 compatibility_date = "2023-02-28"
 
+vars = { ENVIRONMENT = "development" }
+
 kv_namespaces = [
     { binding = "RSSDOGE", id = "76fc30a6d6d148d5be413382baa29228", preview_id = "73297cedbf154a03972f47fc4baabd6a" }
 ]
 
-[vars]
-ENV='production'
+[env.production]
+vars = { ENVIRONMENT = "production" }
 
 [triggers]
 crons = ["0 9,11,17 * * mon-fri"]

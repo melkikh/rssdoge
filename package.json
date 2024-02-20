@@ -6,7 +6,7 @@
   "main": "src/index.js",
   "scripts": {
     "format": "prettier --write '**/*.{js,css,json,md}'",
-    "deploy": "wrangler deploy --config wrangler.toml"
+    "deploy": "wrangler deploy --config wrangler.toml --env production"
   },
   "author": "melkikh <melkih.a.a@gmail.com>",
   "license": "Apache-2.0",

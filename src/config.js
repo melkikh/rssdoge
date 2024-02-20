@@ -17,7 +17,7 @@ export const config = {
       patryk_kosieradzki: "https://patrykkosieradzki.medium.com/feed",
       github_security: "https://github.blog/category/security/feed",
       microsoft_engineering: "https://devblogs.microsoft.com/engineering-at-microsoft/feed/",
-      microsoft_entra: "https://devblogs.microsoft.com/identity/feed/",
+      microsoft_identity_devblog: "https://devblogs.microsoft.com/identity/feed/",
       microsoft_defender_for_cloud: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=MicrosoftDefenderCloudBlog&size=25&label=Cloud%20Security%20Posture%20Management",
       microsoft_security: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=MicrosoftSecurityandCompliance&size=25",
       microsoft_core_infra_security: "https://techcommunity.microsoft.com/plugins/custom/microsoft/o365/custom-blog-rss?tid=-3601065208085691870&board=CoreInfrastructureandSecurityBlog&size=25",
@@ -53,4 +53,4 @@ export const config = {
       googleonlinesecurity: "http://feeds.feedburner.com/GoogleOnlineSecurityBlog",
     },
   },
-}[ENV];
+}[ENVIRONMENT];
