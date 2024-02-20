@@ -19,7 +19,7 @@ async function handleRequest(event) {
     } catch (error) {
       return new Response(error, { status: 401 });
     }
-    lastUpdate = await handleScheduled(event);
+    lastUpdate = await processEvent(event);
   } else {
     return new Response(`Not found`, { status: 404 });
   }
@@ -42,10 +42,10 @@ function authenticate(request) {
 }
 
 addEventListener("scheduled", (event) => {
-  event.waitUntil(handleScheduled(event));
+  event.waitUntil(processEvent(event));
 });
 
-async function handleScheduled(event) {
+async function processEvent(event) {
   const sinceRaw = await RSSDOGE.get("last-update-date");
   const sinceDate = sinceRaw !== null ? new Date(sinceRaw) : new Date(0);
   const now = new Date();
@@ -60,11 +60,12 @@ async function handleScheduled(event) {
     try {
       items = await fetchFeed(url, sinceDate, tag);
     } catch (error) {
-      console.log(`Failed to fetch ${url}`);
-      console.log(error);
+      console.log(`Failed to fetch ${url}: ${error.message}`);
     }
     content.push(...items);
   }
+
+  content = uniquePosts(content, "link");
 
   content.sort((a, b) => {
     let aDate = new Date(a.date);
@@ -83,8 +84,7 @@ async function handleScheduled(event) {
     try {
       await bot.sendMessage(text);
     } catch (error) {
-      console.log(`Failed to send message to Telegram`);
-      console.log(error);
+      console.log(`Failed to send message to Telegram: ${error.message}`);
     }
   }
 
@@ -129,6 +129,11 @@ async function fetchFeed(url, since, tag) {
   }
   console.log(`Feed was fetched successfully: ${tag} (${posts.length} posts)`);
   return posts;
+}
+
+function uniquePosts(array, key) {
+  const unique = [...new Set(array.map((item) => item[key]))];
+  return unique;
 }
 
 function createPostMarkdown(post) {
