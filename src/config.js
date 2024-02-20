@@ -43,6 +43,7 @@ export const config = {
       cloudflare_attacks: "https://blog.cloudflare.com/tag/attacks/",
       cloudflare_workers: "https://blog.cloudflare.com/tag/workers/",
       ksoc: "https://ksoc.com/blog/rss.xml",
+      gitlab_security_handbook: "https://gitlab.com/gitlab-com/content-sites/handbook/-/commits/main/content/handbook/security?feed_token=glft-236d47d3a969f619946a0c4137a484545e76b0fc66e90084c95069045015cd17-7823759&format=atom",
     },
   },
   development: {
