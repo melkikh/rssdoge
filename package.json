@@ -1,17 +1,20 @@
 {
   "private": true,
   "name": "rssdoge",
+  "type": "module",
   "version": "1.0.0",
   "description": "",
   "main": "src/index.js",
   "scripts": {
     "format": "prettier --write '**/*.{js,css,json,md}'",
-    "deploy": "wrangler deploy --config wrangler.toml --env production"
+    "deploy": "wrangler deploy --config wrangler.toml",
+    "dev": "wrangler dev --port 3000 --var TELEGRAM_TOKEN:\"$TELEGRAM_TOKEN\" --var ENVIRONMENT:development"
   },
   "author": "melkikh <melkih.a.a@gmail.com>",
   "license": "Apache-2.0",
   "dependencies": {
     "@extractus/feed-extractor": "github:extractus/feed-extractor",
+    "itty-router": "^4.0.27",
     "wrangler": "^3.28.3"
   }
 }

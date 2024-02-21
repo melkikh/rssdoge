@@ -1,4 +1,4 @@
-export default class Telegram {
+export class Telegram {
   constructor(props) {
     this.chatID = props.chatID;
     this.token = props.token;
@@ -10,7 +10,6 @@ export default class Telegram {
       text: message,
       parse_mode: "html",
     };
-    console.log(message);
     const response = await fetch(
       `https://api.telegram.org/bot${this.token}/sendMessage`,
       {
