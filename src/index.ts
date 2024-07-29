@@ -60,8 +60,7 @@ async function getContent(ctx, feeds, ages) {
       console.log(`Fetching '${tag}' feed took ${end - start}ms`);
       content.push(...items);
     } catch (error) {
-      console.log(`Failed to fetch '${tag}' feed`, 'error');
-      ctx.sentry.captureException(error);
+      ctx.sentry.captureException(new Error(`Failed to fetch '${tag}' feed`, { cause: error }));
     }
   }
 
@@ -83,8 +82,7 @@ async function processEvent(event, env, ctx) {
     try {
       await bot.sendMessage(text);
     } catch (error) {
-      console.error(`Failed to send message to Telegram`, error);
-      ctx.sentry.captureException(error);
+      ctx.sentry.captureException(new Error(`Failed to send message to Telegram`, { cause: error }));
     }
   }
 
