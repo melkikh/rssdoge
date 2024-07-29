@@ -11,4 +11,4 @@ kv_namespaces = [
 ]
 
 [triggers]
-crons = ["0 9,11,17 * * mon-fri"]
+crons = ["0,30 9-18 * * mon-fri"]

@@ -18,7 +18,7 @@ export class Telegram {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(data),
-      }
+      },
     );
     if (response.status !== 200) {
       const errText = await response.text();

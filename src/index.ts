@@ -1,8 +1,14 @@
-import { Router, error, json, text, withParams } from "itty-router";
-import { config } from "./config";
+import '@cloudflare/workers-types';
+import { Router, error, json } from "itty-router";
+import config from "./config";
 import { Telegram } from "./telegram";
-import { fetchFeed } from "./feed"
-import { sortDate, buildProxyURL, createPostMarkdown } from "./utils"
+import { KV } from "./kv";
+import { fetchFeed } from "./feed";
+import { sortDate, createPostMarkdown, initSentry, randomMapElements } from "./utils";
+
+interface Env {
+  RSSDOGE: KVNamespace;
+}
 
 const authMiddleware = (request, env, ctx) => {
   const authn = ctx.config.authentication;
@@ -22,85 +28,88 @@ const authMiddleware = (request, env, ctx) => {
 };
 
 async function statusHandler(request, env, ctx) {
-  const lastUpdate = await env.RSSDOGE.get("last-update-date");
-  return json({status: lastUpdate})
+  const ages = await ctx.kv.getAll();
+  return json(ages)
 }
 
-async function refreshHandler(request, env, ctx) {
-  const lastUpdate = await processEvent({}, env, ctx);
-  return json({status: lastUpdate})
-}
-
-async function proxyHandler(request, env, ctx) {
-  const feeds = ctx.config.feeds;
-  const { feed } = request;
-
-  const remoteUrl = feeds[feed];
-  if (!remoteUrl) return error(404, "Not found");
-
-  const response = await fetch(remoteUrl, {
-    cf: {
-      cacheTtl: 60 * 60,
-      cacheEverything: true,
-    },
-  });
-  return response;
-}
-
-
-async function processEvent(event, env, ctx) {
-  const sinceRaw = await env.RSSDOGE.get("last-update-date");
-  const sinceDate = sinceRaw !== null ? new Date(sinceRaw) : new Date(0);
+async function indexHandler(request, env, ctx) {
   const now = new Date();
-  const feeds = ctx.config.feeds;
   const bot = new Telegram({
     token: ctx.config.telegramToken,
     chatID: ctx.config.telegramChatID,
   });
+  const ages = await ctx.kv.getAll();
+  const content = await getContent(ctx, ctx.config.feeds, ages);
+  return json(content)
+}
 
+async function updateHandler(request, env, ctx) {
+  await processEvent(request, env, ctx);
+  return json({status: 'ok'})
+}
+
+async function getContent(ctx, feeds, ages) {
   let content = [];
   for (const tag of Object.keys(feeds)) {
+    const sinceDate = ages[tag] ? new Date(ages[tag]) : new Date(0);
     try {
-      const url = buildProxyURL(ctx.config.baseURL, tag);
-      const items = await fetchFeed(url, tag, sinceDate);
+      const url = feeds[tag];
+      const start = performance.now();
+      const items = await fetchFeed(url, sinceDate, tag);
+      const end = performance.now();
+      console.log(`Fetching '${tag}' feed took ${end - start}ms`);
       content.push(...items);
     } catch (error) {
-      console.log(`Failed to fetch ${tag}: ${error.message}`);
+      console.log(`Failed to fetch '${tag}' feed`, 'error');
+      ctx.sentry.captureException(error);
     }
   }
 
   content.sort(sortDate);
+  return content;
+}
 
+async function processEvent(event, env, ctx) {
+  const now = new Date();
+  const bot = new Telegram({
+    token: ctx.config.telegramToken,
+    chatID: ctx.config.telegramChatID,
+  });
+  const ages = await ctx.kv.getAll();
+  const feeds = randomMapElements(ctx.config.feeds, ctx.config.updateCount);
+  const content = await getContent(ctx, feeds, ages);
   for (const post of content) {
     const text = createPostMarkdown(post);
     try {
       await bot.sendMessage(text);
     } catch (error) {
-      console.log(`Failed to send message to Telegram: ${error.message}`);
+      console.error(`Failed to send message to Telegram`, error);
+      ctx.sentry.captureException(error);
     }
   }
 
-  const newDate = now.toISOString();
-  await env.RSSDOGE.put("last-update-date", newDate);
-  return newDate;
+  await ctx.kv.updateValues(Object.keys(feeds), now);
 }
 
 const router = Router({ base: "/" });
 
 router
-  .get("/ping", () => text("pong"))
-  .get("/", statusHandler)
-  .get("/proxy/:feed", withParams, proxyHandler)
-  .post("/refresh", authMiddleware, refreshHandler)
+  .get("/ping", statusHandler)
+  .get("/", authMiddleware, indexHandler)
+  .post("/update", authMiddleware, updateHandler)
   .all("*", () => error(404));
 
 export default {
   async fetch (request, env, context) {
     context.config = config(env);
+    context.kv = new KV({ kv: env.RSSDOGE });
+    context.sentry = initSentry(request, env, context);
     return await router.handle(request, env, context).then(json).catch(error)
   },
   async scheduled (event, env, context) {
     context.config = config(env);
+    context.kv = new KV({ kv: env.RSSDOGE });
+    context.sentry = initSentry(event, env, context);
     return await processEvent(event, env, context)
   }
 };

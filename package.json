@@ -2,19 +2,28 @@
   "private": true,
   "name": "rssdoge",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "",
   "main": "src/index.js",
   "scripts": {
     "format": "prettier --write '**/*.{js,css,json,md}'",
-    "deploy": "wrangler deploy --config wrangler.toml",
-    "dev": "wrangler dev --port 3000 --var TELEGRAM_TOKEN:\"$TELEGRAM_TOKEN\" --var ENVIRONMENT:development"
+    "deploy": "npm run build && wrangler deploy --config wrangler.toml",
+    "build": "wrangler deploy --upload-source-maps --dry-run --outdir=dist && npm run create-sentry-release",
+    "create-sentry-release": "./node_modules/.bin/sentry-cli releases new \"1.0.2\" --finalize && ./node_modules/.bin/sentry-cli releases files \"1.0.2\" upload-sourcemaps ./dist",
+    "dev": "wrangler dev --port 3000 --var TELEGRAM_TOKEN:\"$TELEGRAM_TOKEN\" --var SENTRY_DSN:\"$SENTRY_DSN\" --var ENVIRONMENT:development"
   },
   "author": "melkikh <melkih.a.a@gmail.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@extractus/feed-extractor": "github:extractus/feed-extractor",
+    "@cloudflare/workers-types": "^4.20240725.0",
+    "@extractus/feed-extractor": "7.0.9",
     "itty-router": "^4.0.27",
+    "prettier": "^3.3.3",
+    "toucan-js": "^4.0.0",
     "wrangler": "^3.28.3"
+  },
+  "//": "@extractus/feed-extractor was fixed on 7.0.9 to avoid issues with Buffer API in the cloudflare workers",
+  "devDependencies": {
+    "@sentry/cli": "^2.33.0"
   }
 }

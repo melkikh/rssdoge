@@ -4,7 +4,7 @@ A simple Cloudflare worker that aggregates different RSS/ATOM feeds and forwards
 
 ## Example
 
-Here is an example of a Telegram channel that provides security-related content that I find interesting: [t.me/owsecurity](https://t.me/owsecurity).
+Here is an example of a Telegram channel that provides security-related content that I find interesting: [t.me/secpaperboy](https://t.me/secpaperboy).
 
 ## How to use
 

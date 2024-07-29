@@ -1,10 +1,12 @@
-export const config = (env) => {
+export default (env) => {
   return {
     production: {
       authentication: true,
       baseURL: "https://rss-doge.melkikh.workers.dev/",
       telegramToken: env.TELEGRAM_TOKEN,
-      telegramChatID: "@owsecurity",
+      telegramChatID: "@secpaperboy",
+      sentry_dsn: env.SENTRY_DSN,
+      updateCount: 10,
       feeds: {
         netsec: "https://reddit.com/r/netsec.rss",
         opennet: "https://www.opennet.ru/opennews/opennews_sec.rss",
@@ -14,7 +16,6 @@ export const config = (env) => {
         rapid7: "https://blog.rapid7.com/rss/",
         stackexchange_appsec: "https://security.stackexchange.com/feeds/tag/appsec",
         tavis_ormandy: "http://blog.cmpxchg8b.com/feeds/posts/default",
-        brycx: "https://brycx.github.io/feed.xml",
         tailscale: "https://tailscale.com/blog/index.xml",
         datadog_security: "https://securitylabs.datadoghq.com/rss/feed.xml",
         patryk_kosieradzki: "https://patrykkosieradzki.medium.com/feed",
@@ -54,6 +55,8 @@ export const config = (env) => {
       baseURL: "http://127.0.0.1:3000/",
       telegramToken: env.TELEGRAM_TOKEN,
       telegramChatID: "51818321",
+      sentry_dsn: env.SENTRY_DSN,
+      updateCount: 10,
       feeds: {
         cloudflare_workers: "https://blog.cloudflare.com/tag/workers/rss",
       },
