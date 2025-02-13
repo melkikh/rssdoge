@@ -2,7 +2,8 @@ name = "rss-doge"
 account_id = "192f419a98de6d7213ce83e0fcf04e51"
 workers_dev = true
 main = "src/index.ts"
-compatibility_date = "2023-02-28"
+compatibility_flags = ["nodejs_compat"]
+compatibility_date = "2024-09-23"
 
 vars = { ENVIRONMENT = "production" }
 
