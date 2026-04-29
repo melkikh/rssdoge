@@ -23,6 +23,7 @@ export default (env) => {
         meta_engineering: "https://engineering.fb.com/feed/",
         google_online_security: "http://feeds.feedburner.com/GoogleOnlineSecurityBlog",
         google_project_zero: "https://googleprojectzero.blogspot.com/feeds/posts/default",
+        google_security: "https://blog.google/technology/safety-security/rss",
         rapid7: "https://blog.rapid7.com/rss/",
         tavis_ormandy: "http://blog.cmpxchg8b.com/feeds/posts/default",
         tailscale: "https://tailscale.com/blog/index.xml",
@@ -40,6 +41,9 @@ export default (env) => {
         unskilled: "https://unskilled.blog/index.xml",
         rami_mac: "https://ramimac.me/feed.xml",
         kanenarraway: "https://kanenarraway.com/index.xml",
+        bruce_schneier: "https://www.schneier.com/feed/atom",
+        badprivacy: "https://medium.com/feed/@badprivacy",
+        
       },
     },
     development: {

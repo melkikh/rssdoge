@@ -11,5 +11,8 @@ kv_namespaces = [
     { binding = "RSSDOGE", id = "76fc30a6d6d148d5be413382baa29228", preview_id = "73297cedbf154a03972f47fc4baabd6a" }
 ]
 
+[ai]
+binding = "AI"
+
 [triggers]
 crons = ["0,30 9-18 * * mon-fri"]
