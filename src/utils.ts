@@ -12,12 +12,21 @@ export function sortDate (a, b) {
   }
 };
 
-export function createPostMarkdown(post) {
-  return `<b>${post.title}</b>
-<a href="${post.link}">Read.</a>
-    
-- \#${post.tag}`;
-};
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+export function createPostMarkdown(post, bullets: string): string {
+  const title = escapeHtml(post.title || "");
+  const tag = escapeHtml(post.tag || "");
+  const header = `#${tag} <a href="${post.link}">${title}</a>`;
+  if (!bullets) return header;
+  return `${header}\n${bullets}`;
+}
+
 
 export function initSentry(request, env, context) {
   const sentry = new Toucan({

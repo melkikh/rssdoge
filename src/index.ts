@@ -3,12 +3,15 @@ import { Router, error, json } from "itty-router";
 import config from "./config";
 import { Telegram } from "./telegram";
 import { KV } from "./kv";
-import { fetchFeed } from "./feed";
+import { fetchFeed, Post } from "./feed";
 import { sortDate, createPostMarkdown, initSentry, randomMapElements } from "./utils";
+import { summarizePost } from "./ai";
 
 interface Env {
   RSSDOGE: KVNamespace;
+  AI: Ai;
 }
+
 
 const authMiddleware = (request, env, ctx) => {
   const authn = ctx.config.authentication;
@@ -33,11 +36,6 @@ async function statusHandler(request, env, ctx) {
 }
 
 async function indexHandler(request, env, ctx) {
-  const now = new Date();
-  const bot = new Telegram({
-    token: ctx.config.telegramToken,
-    chatID: ctx.config.telegramChatID,
-  });
   const ages = await ctx.kv.getAll();
   const content = await getContent(ctx, ctx.config.feeds, ages);
   return json(content)
@@ -49,18 +47,18 @@ async function updateHandler(request, env, ctx) {
 }
 
 async function getContent(ctx, feeds, ages) {
-  let content = [];
+  let content: Post[] = [];
   for (const tag of Object.keys(feeds)) {
     const sinceDate = ages[tag] ? new Date(ages[tag]) : new Date(0);
     try {
       const url = feeds[tag];
       const start = performance.now();
-      const items = await fetchFeed(url, sinceDate, tag);
+      const items = await fetchFeed(url, sinceDate, tag, ctx.config.bodyLimit);
       const end = performance.now();
       console.log(`Fetching '${tag}' feed took ${end - start}ms`);
       content.push(...items);
-    } catch (error) {
-      ctx.sentry.captureException(new Error(`Failed to fetch '${tag}' feed`, { cause: error }));
+    } catch (err) {
+      ctx.sentry.captureException(new Error(`Failed to fetch '${tag}' feed`, { cause: err }));
     }
   }
 
@@ -77,12 +75,30 @@ async function processEvent(event, env, ctx) {
   const ages = await ctx.kv.getAll();
   const feeds = randomMapElements(ctx.config.feeds, ctx.config.updateCount);
   const content = await getContent(ctx, feeds, ages);
-  for (const post of content) {
-    const text = createPostMarkdown(post);
+
+  for (let i = 0; i < content.length; i += ctx.config.postsPerMessage) {
+    const batch = content.slice(i, i + ctx.config.postsPerMessage);
+    const parts: string[] = [];
+
+    for (const post of batch) {
+      if (!post.body) {
+        ctx.sentry.captureException(new Error(`Post '${post.title}' has no body, skipping`));
+        continue;
+      }
+      let bullets = "";
+      try {
+        bullets = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt);
+      } catch (err) {
+        ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}'`, { cause: err }));
+      }
+      parts.push(createPostMarkdown(post, bullets));
+    }
+
+    const message = parts.join("\n\n");
     try {
-      await bot.sendMessage(text);
-    } catch (error) {
-      ctx.sentry.captureException(new Error(`Failed to send message to Telegram`, { cause: error }));
+      await bot.sendMessage(message);
+    } catch (err) {
+      ctx.sentry.captureException(new Error(`Failed to send message to Telegram`, { cause: err }));
     }
   }
 

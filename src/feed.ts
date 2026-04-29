@@ -1,6 +1,17 @@
 import { extract } from "@extractus/feed-extractor";
 
-export async function fetchFeed(url, since, tag) {
+export type Post = {title: string | undefined, link: any, date: Date, tag: any, body: string};
+
+function stripHtml(raw: unknown, limit: number): string {
+  if (typeof raw !== "string") return "";
+  return raw
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+export async function fetchFeed(url, since, tag, bodyLimit: number) {
   console.log(`[fetchFeed] start to fetch feed: ${url} since ${since}`);
 
   const response = await extract(
@@ -11,7 +22,8 @@ export async function fetchFeed(url, since, tag) {
         attributeNamePrefix: "@_",
       },
       getExtraEntryFields: (feedEntry) => {
-        const { link } = feedEntry;
+        const { link, description, "content:encoded": contentEncoded, content } = feedEntry as any;
+        const rawContent = contentEncoded || content || description || "";
         return {
           links: Array.isArray(link)
             ? link.reduce((acc, cur) => {
@@ -21,21 +33,23 @@ export async function fetchFeed(url, since, tag) {
                 return acc;
               }, [])
             : [],
+          body: stripHtml(rawContent, bodyLimit),
         };
       },
     },
   );
 
-  const posts = [];
+  const posts: Post[] = [];
   if (!response.entries) return posts;
-  
+
+  const uniqueLinks = new Set();
   for (let item of response.entries) {
-    const uniqueLinks = new Set();
     const candidate = {
       title: item.title,
-      link: item.links.length > 0 ? item.links[0] : item.link,
-      date: new Date(item.published),
+      link: (item as any).links?.length > 0 ? (item as any).links[0] : item.link,
+      date: new Date(item.published ?? 0),
       tag: tag,
+      body: (item as any).body || "",
     };
 
     if (candidate.date <= since || uniqueLinks.has(candidate.link)) {
