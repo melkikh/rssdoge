@@ -47,7 +47,9 @@ export default (env) => {
         kanenarraway: "https://kanenarraway.com/index.xml",
         bruce_schneier: "https://www.schneier.com/feed/atom",
         badprivacy: "https://medium.com/feed/@badprivacy",
-        
+        oblique_security: "https://oblique.security/blog/feed.xml",
+        theengineersetlist: "https://theengineersetlist.substack.com/feed",
+        philvenables: "https://www.philvenables.com/blog-feed.xml",
       },
     },
     development: {

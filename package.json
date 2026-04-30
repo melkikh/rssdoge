@@ -22,7 +22,7 @@
   "//": "@extractus/feed-extractor was fixed on 7.0.9 to avoid issues with Buffer API in the cloudflare workers",
   "devDependencies": {
     "@dotenvx/dotenvx": "^1.14.2",
-"prettier": "^3.3.3",
+    "prettier": "^3.3.3",
     "wrangler": "^3.78.12"
   }
 }
