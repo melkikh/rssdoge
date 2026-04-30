@@ -82,14 +82,14 @@ async function processEvent(event, env, ctx) {
 
     for (const post of batch) {
       if (!post.body) {
-        ctx.sentry.captureException(new Error(`Post '${post.title}' has no body, skipping`));
+        ctx.sentry.captureException(new Error(`Post '${post.title}' [${post.tag}] has no body, skipping`));
         continue;
       }
       let bullets = "";
       try {
         bullets = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt);
       } catch (err) {
-        ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}'`, { cause: err }));
+        ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}' [${post.tag}]`, { cause: err }));
       }
       parts.push(createPostMarkdown(post, bullets));
     }
@@ -98,7 +98,8 @@ async function processEvent(event, env, ctx) {
     try {
       await bot.sendMessage(message);
     } catch (err) {
-      ctx.sentry.captureException(new Error(`Failed to send message to Telegram`, { cause: err }));
+      const batchTags = [...new Set(batch.map(p => p.tag))].join(', ');
+      ctx.sentry.captureException(new Error(`Failed to send message to Telegram [${batchTags}]`, { cause: err }));
     }
   }
 

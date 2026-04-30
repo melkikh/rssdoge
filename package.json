@@ -8,8 +8,7 @@
   "scripts": {
     "format": "prettier --write '**/*.{js,css,json,md}'",
     "deploy": "npm run build && wrangler deploy --config wrangler.toml",
-    "build": "wrangler deploy --upload-source-maps --dry-run --outdir=dist && npm run create-sentry-release",
-    "create-sentry-release": "./node_modules/.bin/dotenvx run -- ./node_modules/.bin/sentry-cli releases new \"1.0.2\" --project 4507663127085056 --finalize && ./node_modules/.bin/dotenvx run -- ./node_modules/.bin/sentry-cli releases files \"1.0.2\" --project 4507663127085056 upload-sourcemaps ./dist",
+    "build": "wrangler deploy --upload-source-maps --dry-run --outdir=dist",
     "dev": "./node_modules/.bin/dotenvx run -- wrangler dev --port 3000 --var TELEGRAM_TOKEN:\"$TELEGRAM_TOKEN\" --var SENTRY_DSN:\"$SENTRY_DSN\" --var ENVIRONMENT:development"
   },
   "author": "melkikh <melkih.a.a@gmail.com>",
@@ -23,8 +22,7 @@
   "//": "@extractus/feed-extractor was fixed on 7.0.9 to avoid issues with Buffer API in the cloudflare workers",
   "devDependencies": {
     "@dotenvx/dotenvx": "^1.14.2",
-    "@sentry/cli": "^2.33.0",
-    "prettier": "^3.3.3",
+"prettier": "^3.3.3",
     "wrangler": "^3.78.12"
   }
 }
