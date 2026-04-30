@@ -1,16 +1,13 @@
-const MAX_TOTAL = 10000;
-const TAIL_SIZE = 1500;
-
-export async function summarizePost(post: {title: string | undefined, body: string}, ai: any, model: string, prompt: string): Promise<string> {
+export async function summarizePost(post: {title: string | undefined, body: string}, ai: any, model: string, prompt: string, maxBodyTotal: number, tailSize: number): Promise<string> {
   if (!ai) return "";
   if (!post.body) throw new Error(`Post '${post.title}' has no body`);
 
   let bodyText: string;
-  if (post.body.length <= MAX_TOTAL) {
+  if (post.body.length <= maxBodyTotal) {
     bodyText = post.body;
   } else {
-    const headEnd = MAX_TOTAL - TAIL_SIZE;
-    bodyText = post.body.slice(0, headEnd) + "\n...\n" + post.body.slice(-TAIL_SIZE);
+    const headEnd = maxBodyTotal - tailSize;
+    bodyText = post.body.slice(0, headEnd) + "\n...\n" + post.body.slice(-tailSize);
   }
 
   const text = `Title: ${post.title}\n\n${bodyText}`;

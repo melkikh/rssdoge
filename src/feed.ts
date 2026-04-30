@@ -11,7 +11,7 @@ function stripHtml(raw: unknown, limit: number): string {
     .slice(0, limit);
 }
 
-export async function fetchFeed(url, since, tag, bodyLimit: number) {
+export async function fetchFeed(url, since, tag, maxBodyTotal: number, timeoutMs: number) {
   console.log(`[fetchFeed] start to fetch feed: ${url} since ${since}`);
 
   const response = await extract(
@@ -33,10 +33,11 @@ export async function fetchFeed(url, since, tag, bodyLimit: number) {
                 return acc;
               }, [])
             : [],
-          body: stripHtml(rawContent, bodyLimit),
+          body: stripHtml(rawContent, maxBodyTotal),
         };
       },
     },
+    { signal: AbortSignal.timeout(timeoutMs) },
   );
 
   const posts: Post[] = [];

@@ -53,7 +53,7 @@ async function getContent(ctx, feeds, ages) {
     try {
       const url = feeds[tag];
       const start = performance.now();
-      const items = await fetchFeed(url, sinceDate, tag, ctx.config.bodyLimit);
+      const items = await fetchFeed(url, sinceDate, tag, ctx.config.maxBodyTotal, ctx.config.feedTimeoutMs);
       const end = performance.now();
       console.log(`Fetching '${tag}' feed took ${end - start}ms`);
       content.push(...items);
@@ -88,7 +88,7 @@ async function processEvent(event, env, ctx) {
         }
         let bullets = "";
         try {
-          bullets = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt);
+          bullets = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt, ctx.config.maxBodyTotal, ctx.config.tailSize);
         } catch (err) {
           ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}' [${post.tag}]`, { cause: err }));
         }
