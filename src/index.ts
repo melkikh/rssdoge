@@ -76,34 +76,38 @@ async function processEvent(event, env, ctx) {
   const feeds = randomMapElements(ctx.config.feeds, ctx.config.updateCount);
   const content = await getContent(ctx, feeds, ages);
 
-  for (let i = 0; i < content.length; i += ctx.config.postsPerMessage) {
-    const batch = content.slice(i, i + ctx.config.postsPerMessage);
-    const parts: string[] = [];
+  try {
+    for (let i = 0; i < content.length; i += ctx.config.postsPerMessage) {
+      const batch = content.slice(i, i + ctx.config.postsPerMessage);
+      const parts: string[] = [];
 
-    for (const post of batch) {
-      if (!post.body) {
-        ctx.sentry.captureException(new Error(`Post '${post.title}' [${post.tag}] has no body, skipping`));
-        continue;
+      for (const post of batch) {
+        if (!post.body) {
+          ctx.sentry.captureException(new Error(`Post '${post.title}' [${post.tag}] has no body, skipping`));
+          continue;
+        }
+        let bullets = "";
+        try {
+          bullets = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt);
+        } catch (err) {
+          ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}' [${post.tag}]`, { cause: err }));
+        }
+        parts.push(createPostMarkdown(post, bullets));
       }
-      let bullets = "";
-      try {
-        bullets = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt);
-      } catch (err) {
-        ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}' [${post.tag}]`, { cause: err }));
-      }
-      parts.push(createPostMarkdown(post, bullets));
-    }
 
-    const message = parts.join("\n\n");
-    try {
-      await bot.sendMessage(message);
-    } catch (err) {
-      const batchTags = [...new Set(batch.map(p => p.tag))].join(', ');
-      ctx.sentry.captureException(new Error(`Failed to send message to Telegram [${batchTags}]`, { cause: err }));
+      if (parts.length > 0) {
+        const message = parts.join("\n\n");
+        try {
+          await bot.sendMessage(message);
+        } catch (err) {
+          const batchTags = [...new Set(batch.map(p => p.tag))].join(', ');
+          ctx.sentry.captureException(new Error(`Failed to send message to Telegram [${batchTags}]`, { cause: err }));
+        }
+      }
     }
+  } finally {
+    await ctx.kv.updateValues(Object.keys(feeds), now);
   }
-
-  await ctx.kv.updateValues(Object.keys(feeds), now);
 }
 
 const router = Router({ base: "/" });
