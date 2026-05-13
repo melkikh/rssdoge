@@ -50,6 +50,7 @@ export default (env) => {
         oblique_security: "https://oblique.security/blog/feed.xml",
         theengineersetlist: "https://theengineersetlist.substack.com/feed",
         philvenables: "https://www.philvenables.com/blog-feed.xml",
+        pilotprotocol: "https://pilotprotocol.network/blog/feed.xml",
       },
     },
     development: {
