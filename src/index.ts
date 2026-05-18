@@ -92,6 +92,7 @@ async function processEvent(event, env, ctx) {
         } catch (err) {
           ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}' [${post.tag}]`, { cause: err }));
         }
+        if (bullets.includes("__SKIP_BULLETS__")) bullets = "";
         parts.push(createPostMarkdown(post, bullets));
       }
 
