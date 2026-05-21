@@ -36,7 +36,7 @@ export default (env) => {
 Формат: только пункты, каждый с новой строки, с "- "; без вступления и без финального обобщения. Не переноси слова дефисом между строками; каждый пункт — цельные слова и законченная мысль.`,
       maxBodyTotal: 10000,
       tailSize: 1500,
-      feedTimeoutMs: 5000,
+      feedTimeoutMs: 10000,
       postsPerMessage: 5,
       feeds: {
         netsec: "https://reddit.com/r/netsec.rss",
@@ -106,7 +106,7 @@ export default (env) => {
 Формат: только пункты, каждый с новой строки, с "- "; без вступления и без финального обобщения. Не переноси слова дефисом между строками; каждый пункт — цельные слова и законченная мысль.`,
       maxBodyTotal: 10000,
       tailSize: 1500,
-      feedTimeoutMs: 5000,
+      feedTimeoutMs: 10000,
       postsPerMessage: 5,
       feeds: {
         cloudflare_workers: "https://blog.cloudflare.com/tag/workers/rss",

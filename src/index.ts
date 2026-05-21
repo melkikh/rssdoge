@@ -3,7 +3,7 @@ import { Router, error, json } from "itty-router";
 import config from "./config";
 import { Telegram } from "./telegram";
 import { KV } from "./kv";
-import { fetchFeed, Post } from "./feed";
+import { fetchFeed } from "./feed";
 import { sortDate, createPostMarkdown, initSentry, randomMapElements } from "./utils";
 import { summarizePost } from "./ai";
 
@@ -47,21 +47,24 @@ async function updateHandler(request, env, ctx) {
 }
 
 async function getContent(ctx, feeds, ages) {
-  let content: Post[] = [];
-  for (const tag of Object.keys(feeds)) {
-    const sinceDate = ages[tag] ? new Date(ages[tag]) : new Date(0);
-    try {
-      const url = feeds[tag];
-      const start = performance.now();
-      const items = await fetchFeed(url, sinceDate, tag, ctx.config.maxBodyTotal, ctx.config.feedTimeoutMs);
-      const end = performance.now();
-      console.log(`Fetching '${tag}' feed took ${end - start}ms`);
-      content.push(...items);
-    } catch (err) {
-      ctx.sentry.captureException(new Error(`Failed to fetch '${tag}' feed`, { cause: err }));
-    }
-  }
+  const results = await Promise.all(
+    Object.keys(feeds).map(async (tag) => {
+      const sinceDate = ages[tag] ? new Date(ages[tag]) : new Date(0);
+      try {
+        const url = feeds[tag];
+        const start = performance.now();
+        const items = await fetchFeed(url, sinceDate, tag, ctx.config.maxBodyTotal, ctx.config.feedTimeoutMs);
+        const end = performance.now();
+        console.log(`Fetching '${tag}' feed took ${end - start}ms`);
+        return items;
+      } catch (err) {
+        ctx.sentry.captureException(new Error(`Failed to fetch '${tag}' feed`, { cause: err }));
+        return [];
+      }
+    }),
+  );
 
+  const content = results.flat();
   content.sort(sortDate);
   return content;
 }
@@ -83,7 +86,7 @@ async function processEvent(event, env, ctx) {
 
       for (const post of batch) {
         if (!post.body) {
-          ctx.sentry.captureException(new Error(`Post '${post.title}' [${post.tag}] has no body, skipping`));
+          parts.push(createPostMarkdown(post, ""));
           continue;
         }
         let bullets = "";
@@ -92,7 +95,7 @@ async function processEvent(event, env, ctx) {
         } catch (err) {
           ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}' [${post.tag}]`, { cause: err }));
         }
-        if (bullets.includes("__SKIP_BULLETS__")) bullets = "";
+        if (bullets.trim() === "__SKIP_BULLETS__") bullets = "";
         parts.push(createPostMarkdown(post, bullets));
       }
 

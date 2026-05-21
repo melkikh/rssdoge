@@ -37,7 +37,13 @@ export async function fetchFeed(url, since, tag, maxBodyTotal: number, timeoutMs
         };
       },
     },
-    { signal: AbortSignal.timeout(timeoutMs) },
+    {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; rssdoge/1.0; +https://rss-doge.melkikh.workers.dev/)",
+        "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8",
+      },
+    },
   );
 
   const posts: Post[] = [];

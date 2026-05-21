@@ -20,7 +20,11 @@ export async function summarizePost(post: {title: string | undefined, body: stri
       },
       { role: "user", content: text },
     ],
-    max_tokens: 600,
+    max_completion_tokens: 600,
   });
-  return result?.response?.trim() || "";
+  return (
+    result?.choices?.[0]?.message?.content?.trim()
+    ?? result?.response?.trim()
+    ?? ""
+  );
 }
