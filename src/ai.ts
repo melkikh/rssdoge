@@ -1,5 +1,10 @@
-export async function summarizePost(post: {title: string | undefined, body: string}, ai: any, model: string, prompt: string, maxBodyTotal: number, tailSize: number): Promise<string> {
-  if (!ai) return "";
+export type SummaryResult = {
+  bullets: string;
+  finishReason: string | undefined;
+};
+
+export async function summarizePost(post: {title: string | undefined, body: string}, ai: any, model: string, prompt: string, maxBodyTotal: number, tailSize: number): Promise<SummaryResult> {
+  if (!ai) return { bullets: "", finishReason: undefined };
   if (!post.body) throw new Error(`Post '${post.title}' has no body`);
 
   let bodyText: string;
@@ -20,11 +25,14 @@ export async function summarizePost(post: {title: string | undefined, body: stri
       },
       { role: "user", content: text },
     ],
-    max_completion_tokens: 600,
+    max_completion_tokens: 2000,
+    chat_template_kwargs: { enable_thinking: false },
   });
-  return (
-    result?.choices?.[0]?.message?.content?.trim()
+  const choice = result?.choices?.[0];
+  const bullets = (
+    choice?.message?.content?.trim()
     ?? result?.response?.trim()
     ?? ""
   );
+  return { bullets, finishReason: choice?.finish_reason };
 }

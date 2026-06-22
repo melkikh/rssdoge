@@ -90,8 +90,23 @@ async function processEvent(event, env, ctx) {
           continue;
         }
         let bullets = "";
+        let finishReason: string | undefined;
         try {
-          bullets = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt, ctx.config.maxBodyTotal, ctx.config.tailSize);
+          const res = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt, ctx.config.maxBodyTotal, ctx.config.tailSize);
+          bullets = res.bullets;
+          finishReason = res.finishReason;
+          if (!bullets) {
+            ctx.sentry.withScope(scope => {
+              scope.setLevel("warning");
+              scope.setTag("tag", post.tag);
+              scope.setTag("model", ctx.config.aiModel);
+              scope.setTag("finish_reason", finishReason ?? "missing");
+              scope.setExtra("title", post.title ?? "");
+              scope.setExtra("link", post.link);
+              scope.setExtra("body_length", post.body.length);
+              scope.captureMessage(`Empty summary [${post.tag}] '${post.title}'`);
+            });
+          }
         } catch (err) {
           ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}' [${post.tag}]`, { cause: err }));
         }
