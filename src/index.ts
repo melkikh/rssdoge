@@ -4,8 +4,8 @@ import config from "./config";
 import { Telegram } from "./telegram";
 import { KV } from "./kv";
 import { fetchFeed } from "./feed";
-import { sortDate, createPostMarkdown, initSentry, randomMapElements } from "./utils";
-import { summarizePost } from "./ai";
+import { sortDate, createPostMarkdown, initSentry, randomMapElements, chunkParts } from "./utils";
+import { summarizePost, classifyPost } from "./ai";
 
 interface Env {
   RSSDOGE: KVNamespace;
@@ -37,7 +37,7 @@ async function statusHandler(request, env, ctx) {
 
 async function indexHandler(request, env, ctx) {
   const ages = await ctx.kv.getAll();
-  const content = await getContent(ctx, ctx.config.feeds, ages);
+  const { content } = await getContent(ctx, ctx.config.feeds, ages);
   return json(content)
 }
 
@@ -47,6 +47,7 @@ async function updateHandler(request, env, ctx) {
 }
 
 async function getContent(ctx, feeds, ages) {
+  const failedTags = new Set<string>();
   const results = await Promise.all(
     Object.keys(feeds).map(async (tag) => {
       const sinceDate = ages[tag] ? new Date(ages[tag]) : new Date(0);
@@ -59,6 +60,7 @@ async function getContent(ctx, feeds, ages) {
         return items;
       } catch (err) {
         ctx.sentry.captureException(new Error(`Failed to fetch '${tag}' feed`, { cause: err }));
+        failedTags.add(tag);
         return [];
       }
     }),
@@ -66,7 +68,7 @@ async function getContent(ctx, feeds, ages) {
 
   const content = results.flat();
   content.sort(sortDate);
-  return content;
+  return { content, failedTags };
 }
 
 async function processEvent(event, env, ctx) {
@@ -77,30 +79,58 @@ async function processEvent(event, env, ctx) {
   });
   const ages = await ctx.kv.getAll();
   const feeds = randomMapElements(ctx.config.feeds, ctx.config.updateCount);
-  const content = await getContent(ctx, feeds, ages);
+  const { content, failedTags } = await getContent(ctx, feeds, ages);
 
   try {
     for (let i = 0; i < content.length; i += ctx.config.postsPerMessage) {
       const batch = content.slice(i, i + ctx.config.postsPerMessage);
-      const parts: string[] = [];
+      const parts: { post: any, text: string }[] = [];
 
       for (const post of batch) {
         if (!post.body) {
-          parts.push(createPostMarkdown(post, ""));
+          parts.push({ post, text: createPostMarkdown(post, "") });
           continue;
         }
+
+        let classification: "PASS" | "SKIP" | "UNKNOWN" = "UNKNOWN";
+        try {
+          classification = await classifyPost(post, env.AI, ctx.config.aiModel, ctx.config.classifierPrompt, ctx.config.classifierMaxBodyChars);
+        } catch (err) {
+          ctx.sentry.captureException(new Error(`Failed to classify post '${post.title}' [${post.tag}]`, { cause: err }));
+        }
+
+        if (classification === "SKIP") {
+          parts.push({ post, text: createPostMarkdown(post, "") });
+          continue;
+        }
+
+        if (classification === "UNKNOWN") {
+          ctx.sentry.withScope(scope => {
+            scope.setLevel("warning");
+            scope.setTag("tag", post.tag);
+            scope.setTag("model", ctx.config.aiModel);
+            scope.setExtra("title", post.title ?? "");
+            scope.setExtra("link", post.link);
+            scope.captureMessage(`Classifier returned UNKNOWN [${post.tag}] '${post.title}'`);
+          });
+        }
+
         let bullets = "";
         let finishReason: string | undefined;
+        let rejectedReason: string | undefined;
         try {
           const res = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt, ctx.config.maxBodyTotal, ctx.config.tailSize);
           bullets = res.bullets;
           finishReason = res.finishReason;
+          rejectedReason = res.rejectedReason;
           if (!bullets) {
             ctx.sentry.withScope(scope => {
               scope.setLevel("warning");
               scope.setTag("tag", post.tag);
               scope.setTag("model", ctx.config.aiModel);
               scope.setTag("finish_reason", finishReason ?? "missing");
+              scope.setTag("rejected_reason", rejectedReason ?? "empty");
+              scope.setTag("classification", classification);
               scope.setExtra("title", post.title ?? "");
               scope.setExtra("link", post.link);
               scope.setExtra("body_length", post.body.length);
@@ -111,21 +141,26 @@ async function processEvent(event, env, ctx) {
           ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}' [${post.tag}]`, { cause: err }));
         }
         if (bullets.trim() === "__SKIP_BULLETS__") bullets = "";
-        parts.push(createPostMarkdown(post, bullets));
+        parts.push({ post, text: createPostMarkdown(post, bullets) });
       }
 
-      if (parts.length > 0) {
-        const message = parts.join("\n\n");
+      if (parts.length === 0) continue;
+
+      for (const chunk of chunkParts(parts)) {
         try {
-          await bot.sendMessage(message);
+          await bot.sendMessage(chunk.text);
         } catch (err) {
-          const batchTags = [...new Set(batch.map(p => p.tag))].join(', ');
-          ctx.sentry.captureException(new Error(`Failed to send message to Telegram [${batchTags}]`, { cause: err }));
+          const chunkTags = [...new Set(chunk.posts.map(p => p.tag))];
+          ctx.sentry.captureException(new Error(`Failed to send message to Telegram [${chunkTags.join(', ')}]`, { cause: err }));
+          for (const tag of chunkTags) failedTags.add(tag);
         }
       }
     }
   } finally {
-    await ctx.kv.updateValues(Object.keys(feeds), now);
+    const successfulTags = Object.keys(feeds).filter(tag => !failedTags.has(tag));
+    if (successfulTags.length > 0) {
+      await ctx.kv.updateValues(successfulTags, now);
+    }
   }
 }
 

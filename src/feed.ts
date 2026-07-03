@@ -2,9 +2,19 @@ import { extract } from "@extractus/feed-extractor";
 
 export type Post = {title: string | undefined, link: any, date: Date, tag: any, body: string};
 
+function coerceToString(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object") {
+    const text = (v as any)["#text"];
+    if (typeof text === "string") return text;
+  }
+  return "";
+}
+
 function stripHtml(raw: unknown, limit: number): string {
-  if (typeof raw !== "string") return "";
-  return raw
+  const text = coerceToString(raw);
+  if (!text) return "";
+  return text
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -22,8 +32,8 @@ export async function fetchFeed(url, since, tag, maxBodyTotal: number, timeoutMs
         attributeNamePrefix: "@_",
       },
       getExtraEntryFields: (feedEntry) => {
-        const { link, description, "content:encoded": contentEncoded, content } = feedEntry as any;
-        const rawContent = contentEncoded || content || description || "";
+        const { link, description, summary, "content:encoded": contentEncoded, content } = feedEntry as any;
+        const rawContent = contentEncoded || content || summary || description || "";
         return {
           links: Array.isArray(link)
             ? link.reduce((acc, cur) => {
