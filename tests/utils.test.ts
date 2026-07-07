@@ -75,6 +75,31 @@ describe("createPostMarkdown", () => {
     const md = createPostMarkdown({ title: "t", tag: "sec", link: "https://e.com" }, "- one\n- two");
     expect(md).toBe('#sec <a href="https://e.com">t</a>\n- one\n- two');
   });
+
+  it("prefixes whitepaper category tag in the header", () => {
+    const md = createPostMarkdown(
+      { title: "Paper", tag: "arxiv_cscr", link: "https://arxiv.org/abs/123" },
+      "- bullet",
+      "whitepaper",
+    );
+    expect(md).toBe(
+      '#whitepaper #arxiv_cscr <a href="https://arxiv.org/abs/123">Paper</a>\n- bullet',
+    );
+  });
+
+  it("marks bare-header whitepaper posts with category prefix", () => {
+    const md = createPostMarkdown(
+      { title: "Paper", tag: "arxiv_cscr", link: "https://arxiv.org/abs/123" },
+      "",
+      "whitepaper",
+    );
+    expect(md).toBe('#whitepaper #arxiv_cscr <a href="https://arxiv.org/abs/123">Paper</a>');
+  });
+
+  it("leaves blog posts without category prefix", () => {
+    const md = createPostMarkdown({ title: "News", tag: "netsec", link: "https://e.com/n" }, "");
+    expect(md).toBe('#netsec <a href="https://e.com/n">News</a>');
+  });
 });
 
 describe("sortDate", () => {

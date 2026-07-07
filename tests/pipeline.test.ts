@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Post } from "../src/feed";
-import { tracePost } from "../src/pipeline";
+import { tracePost, resolvePrompts, isWhitepaperTag, buildCursorUpdates } from "../src/pipeline";
 
 const testConfig = {
   minBodyChars: 100,
@@ -10,6 +10,12 @@ const testConfig = {
   aiPrompt: "summarizer",
   maxBodyTotal: 10000,
   tailSize: 1500,
+  whitepaperFeeds: { arxiv_cscr: { url: "https://rss.arxiv.org/rss/cs.CR", readPdf: true } },
+  whitepaperClassifierPrompt: "wp-classifier",
+  whitepaperPrompt: "wp-summarizer",
+  feedTimeoutMs: 10000,
+  neuronGateThreshold: 8000,
+  whitepaperCjkThreshold: 8,
 };
 
 function makePost(overrides: Partial<Post> = {}): Post {
@@ -83,5 +89,68 @@ describe("tracePost", () => {
     expect(trace.pipeline.step).toBe("summary_cjk");
     expect(trace.summary.rejected_reason).toBe("cjk");
     expect(trace.bullets).toBe("");
+  });
+
+  it("uses whitepaper prompts for whitepaper tags", async () => {
+    const prompts: string[] = [];
+    const ai = {
+      run: async (_model: string, opts: { max_completion_tokens?: number; messages?: { content: string }[] }) => {
+        const content = opts.max_completion_tokens === 10 ? "PASS" : "- wp bullet";
+        prompts.push(opts.messages?.[0]?.content ?? "");
+        return { choices: [{ message: { content }, finish_reason: "stop" }] };
+      },
+    };
+    await tracePost(
+      makePost({ tag: "arxiv_cscr" }),
+      { AI: ai as any },
+      { config: testConfig },
+      { skipSentry: true },
+    );
+    expect(prompts[0]).toContain("wp-classifier");
+    expect(prompts[1]).toContain("wp-summarizer");
+  });
+});
+
+describe("resolvePrompts", () => {
+  it("returns whitepaper pair for whitepaper tags", () => {
+    expect(resolvePrompts(testConfig, "arxiv_cscr")).toEqual({
+      classifierPrompt: "wp-classifier",
+      summaryPrompt: "wp-summarizer",
+    });
+  });
+
+  it("returns default pair for blog tags", () => {
+    expect(resolvePrompts(testConfig, "netsec")).toEqual({
+      classifierPrompt: "classifier",
+      summaryPrompt: "summarizer",
+    });
+  });
+});
+
+describe("isWhitepaperTag", () => {
+  it("recognizes whitepaper feed tags", () => {
+    expect(isWhitepaperTag(testConfig, "arxiv_cscr")).toBe(true);
+    expect(isWhitepaperTag(testConfig, "netsec")).toBe(false);
+  });
+});
+
+describe("buildCursorUpdates", () => {
+  const now = new Date("2026-07-07T12:00:00Z");
+  const processedDate = new Date("2026-07-06T08:00:00Z");
+
+  it("uses max processed post date for whitepaper tags", () => {
+    const updates = buildCursorUpdates(
+      ["arxiv_cscr", "netsec"],
+      testConfig,
+      now,
+      { arxiv_cscr: processedDate },
+    );
+    expect(updates.arxiv_cscr).toEqual(processedDate);
+    expect(updates.netsec).toEqual(now);
+  });
+
+  it("falls back to now for whitepaper tags with no processed posts", () => {
+    const updates = buildCursorUpdates(["arxiv_cscr"], testConfig, now, {});
+    expect(updates.arxiv_cscr).toEqual(now);
   });
 });

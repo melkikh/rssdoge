@@ -17,10 +17,12 @@ function escapeHtml(text: string): string {
 export function createPostMarkdown(
   post: { title?: string; tag?: string; link: string },
   bullets: string,
+  category?: "whitepaper",
 ): string {
   const title = escapeHtml(post.title || "");
   const tag = escapeHtml(post.tag || "");
-  const header = `#${tag} <a href="${escapeHtml(post.link)}">${title}</a>`;
+  const categoryPrefix = category === "whitepaper" ? "#whitepaper " : "";
+  const header = `${categoryPrefix}#${tag} <a href="${escapeHtml(post.link)}">${title}</a>`;
   if (!bullets) return header;
   return `${header}\n${escapeHtml(bullets)}`;
 }

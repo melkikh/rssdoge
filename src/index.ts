@@ -6,8 +6,9 @@ import { Telegram } from "./telegram";
 import { KV } from "./kv";
 import { fetchFeed } from "./feed";
 import type { Post } from "./feed";
+import { whitepaperFeedsAsUrls } from "./enrich";
 import { sortDate, createPostMarkdown, initSentry, randomMapElements, chunkParts } from "./utils";
-import { tracePost, bodyPreview, estimateNeurons } from "./pipeline";
+import { tracePost, bodyPreview, estimateNeurons, isWhitepaperTag, buildCursorUpdates } from "./pipeline";
 import type { PostTrace } from "./pipeline";
 
 /** Cloudflare's ExecutionContext with the app singletons we attach per request/cron. */
@@ -16,6 +17,21 @@ type Ctx = ExecutionContext & {
   kv: KV;
   sentry: Toucan;
 };
+
+function allFeeds(config: AppConfig): Record<string, string> {
+  return { ...config.feeds, ...whitepaperFeedsAsUrls(config.whitepaperFeeds) };
+}
+
+function limitWhitepaperPosts(posts: Post[], tag: string, config: AppConfig): Post[] {
+  if (!isWhitepaperTag(config, tag)) return posts;
+  return [...posts]
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .slice(0, config.whitepaperMaxItemsPerRun);
+}
+
+function postCategory(config: AppConfig, tag: string): "whitepaper" | undefined {
+  return isWhitepaperTag(config, tag) ? "whitepaper" : undefined;
+}
 
 const authMiddleware = (request: IRequest, env: Env, ctx: Ctx) => {
   const authn = ctx.config.authentication;
@@ -44,7 +60,7 @@ async function versionHandler(request: IRequest, env: Env) {
 
 async function indexHandler(request: IRequest, env: Env, ctx: Ctx) {
   const ages = await ctx.kv.getAll();
-  const tags = Object.keys(ctx.config.feeds)
+  const tags = Object.keys(allFeeds(ctx.config))
     .sort()
     .map((tag) => ({ tag, updated_at: ages[tag] ?? null }));
   return json({ tags });
@@ -66,7 +82,7 @@ async function getContent(ctx: Ctx, feeds: Record<string, string>, ages: Record<
         });
         const end = performance.now();
         console.log(`Fetching '${tag}' feed took ${end - start}ms`);
-        return items;
+        return limitWhitepaperPosts(items, tag, ctx.config);
       } catch (err) {
         ctx.sentry.captureException(new Error(`Failed to fetch '${tag}' feed`, { cause: err }));
         failedTags.add(tag);
@@ -110,7 +126,8 @@ function logTraceBareHeaders(ctx: Ctx, post: Post, trace: PostTrace) {
   }
 }
 
-function formatDebugPost(post: Post, trace: PostTrace) {
+function formatDebugPost(post: Post, trace: PostTrace, config: AppConfig) {
+  const category = postCategory(config, post.tag);
   return {
     title: post.title,
     link: post.link,
@@ -120,13 +137,14 @@ function formatDebugPost(post: Post, trace: PostTrace) {
     pipeline: trace.pipeline,
     classifier: trace.classifier,
     summary: trace.summary,
-    would_send: createPostMarkdown(post, trace.bullets),
+    enrich: trace.enrich ?? null,
+    would_send: createPostMarkdown(post, trace.bullets, category),
   };
 }
 
 async function debugTagHandler(request: IRequest, env: Env, ctx: Ctx) {
   const tag = request.params?.tag;
-  const feeds = ctx.config.feeds;
+  const feeds = allFeeds(ctx.config);
 
   if (!tag || !feeds[tag]) {
     return json({ error: "unknown tag", tag }, { status: 400 });
@@ -168,10 +186,15 @@ async function debugTagHandler(request: IRequest, env: Env, ctx: Ctx) {
   posts.sort(sortDate);
   posts = posts.slice(0, limit);
 
+  const enrichBudget = { remaining: ctx.config.pdfMaxItemsPerRun, spent: 0 };
+
   const traces = await Promise.all(
     posts.map(async (post) => {
-      const trace = await tracePost(post, env, ctx, { skipSentry: true });
-      return formatDebugPost(post, trace);
+      const trace = await tracePost(post, env, { ...ctx, enrichBudget }, {
+        skipSentry: true,
+        skipNeuronAccounting: true,
+      });
+      return formatDebugPost(post, trace, ctx.config);
     }),
   );
 
@@ -184,6 +207,7 @@ async function debugTagHandler(request: IRequest, env: Env, ctx: Ctx) {
     neurons_estimate: estimateNeurons(
       traces.map((p) => ({ pipeline: p.pipeline })),
     ),
+    enrich_spent: enrichBudget.spent,
     dry_run: true,
   });
 }
@@ -195,8 +219,10 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
     chatID: ctx.config.telegramChatID,
   });
   const ages = await ctx.kv.getAll();
-  const feeds = randomMapElements(ctx.config.feeds, ctx.config.updateCount);
+  const feeds = randomMapElements(allFeeds(ctx.config), ctx.config.updateCount);
   const { content, failedTags } = await getContent(ctx, feeds, ages);
+  const whitepaperMaxDates: Record<string, Date> = {};
+  const enrichBudget = { remaining: ctx.config.pdfMaxItemsPerRun, spent: 0 };
 
   try {
     for (let i = 0; i < content.length; i += ctx.config.postsPerMessage) {
@@ -204,9 +230,15 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
       const parts: { post: Post; text: string }[] = [];
 
       for (const post of batch) {
-        const trace = await tracePost(post, env, ctx);
+        const trace = await tracePost(post, env, { ...ctx, enrichBudget });
+        await ctx.kv.addNeuronEstimate(estimateNeurons([trace]));
         logTraceBareHeaders(ctx, post, trace);
-        parts.push({ post, text: createPostMarkdown(post, trace.bullets) });
+        const category = postCategory(ctx.config, post.tag);
+        parts.push({ post, text: createPostMarkdown(post, trace.bullets, category) });
+        if (isWhitepaperTag(ctx.config, post.tag)) {
+          const prev = whitepaperMaxDates[post.tag];
+          if (!prev || post.date > prev) whitepaperMaxDates[post.tag] = post.date;
+        }
       }
 
       if (parts.length === 0) continue;
@@ -224,7 +256,8 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
   } finally {
     const successfulTags = Object.keys(feeds).filter(tag => !failedTags.has(tag));
     if (successfulTags.length > 0) {
-      await ctx.kv.updateValues(successfulTags, now);
+      const updates = buildCursorUpdates(successfulTags, ctx.config, now, whitepaperMaxDates);
+      await ctx.kv.updateValues(updates);
     }
   }
 }

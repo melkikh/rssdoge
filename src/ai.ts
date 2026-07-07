@@ -33,16 +33,16 @@ export async function classifyPostDetailed(
   return { classification: "UNKNOWN", rawOutput };
 }
 
-function hasTooManyCJK(text: string): boolean {
+function hasTooManyCJK(text: string, threshold = 2): boolean {
   let count = 0;
   for (const ch of text) {
     const cp = ch.codePointAt(0)!;
     const isCJK =
-      (cp >= 0x3400 && cp <= 0x9FFF) ||   // CJK Extension A + Unified Ideographs
-      (cp >= 0x3040 && cp <= 0x30FF) ||   // Hiragana + Katakana
-      (cp >= 0xAC00 && cp <= 0xD7AF) ||   // Hangul syllables
-      (cp >= 0xF900 && cp <= 0xFAFF);     // CJK Compatibility
-    if (isCJK && ++count >= 2) return true;
+      (cp >= 0x3400 && cp <= 0x9FFF) ||
+      (cp >= 0x3040 && cp <= 0x30FF) ||
+      (cp >= 0xAC00 && cp <= 0xD7AF) ||
+      (cp >= 0xF900 && cp <= 0xFAFF);
+    if (isCJK && ++count >= threshold) return true;
   }
   return false;
 }
@@ -65,10 +65,15 @@ function normalizeBullets(text: string): string {
   }).join("\n");
 }
 
-export function sanitizeBullets(raw: string): { bullets: string; rejectedReason?: "cjk" | "empty" } {
+export function sanitizeBullets(
+  raw: string,
+  opts: { cjkThreshold?: number } = {},
+): { bullets: string; rejectedReason?: "cjk" | "empty" } {
   const trimmed = raw.trim();
   if (!trimmed) return { bullets: "", rejectedReason: "empty" };
-  if (hasTooManyCJK(trimmed)) return { bullets: "", rejectedReason: "cjk" };
+  if (hasTooManyCJK(trimmed, opts.cjkThreshold ?? 2)) {
+    return { bullets: "", rejectedReason: "cjk" };
+  }
   const cleaned = normalizeBullets(stripMarkdown(trimmed));
   if (!cleaned) return { bullets: "", rejectedReason: "empty" };
   return { bullets: cleaned };
@@ -76,9 +81,16 @@ export function sanitizeBullets(raw: string): { bullets: string; rejectedReason?
 
 export async function summarizePostDetailed(
   post: { title: string | undefined; body: string },
-  opts: { ai: Ai; model: string; prompt: string; maxBodyTotal: number; tailSize: number },
+  opts: {
+    ai: Ai;
+    model: string;
+    prompt: string;
+    maxBodyTotal: number;
+    tailSize: number;
+    cjkThreshold?: number;
+  },
 ): Promise<SummaryResult & { rawOutput: string }> {
-  const { ai, model, prompt, maxBodyTotal, tailSize } = opts;
+  const { ai, model, prompt, maxBodyTotal, tailSize, cjkThreshold } = opts;
   if (!ai) return { bullets: "", finishReason: undefined, rawOutput: "" };
   if (!post.body) throw new Error(`Post '${post.title}' has no body`);
 
@@ -102,6 +114,6 @@ export async function summarizePostDetailed(
   });
   const choice = result?.choices?.[0];
   const rawOutput = extractContent(result);
-  const { bullets, rejectedReason } = sanitizeBullets(rawOutput);
+  const { bullets, rejectedReason } = sanitizeBullets(rawOutput, { cjkThreshold });
   return { bullets, finishReason: choice?.finish_reason, rejectedReason, rawOutput };
 }

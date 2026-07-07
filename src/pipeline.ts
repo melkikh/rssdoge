@@ -2,6 +2,12 @@ import type { Classification } from "./ai";
 import { classifyPostDetailed, summarizePostDetailed } from "./ai";
 import type { Post } from "./feed";
 import type { AppConfig } from "./config";
+import type { KV } from "./kv";
+import {
+  type EnrichBudget,
+  enrichPostBody,
+  getWhitepaperFeedConfig,
+} from "./enrich";
 
 /** The config fields tracePost actually reads — keeps the test config small and honest. */
 export type PipelineConfig = Pick<
@@ -13,6 +19,12 @@ export type PipelineConfig = Pick<
   | "aiPrompt"
   | "maxBodyTotal"
   | "tailSize"
+  | "whitepaperFeeds"
+  | "whitepaperClassifierPrompt"
+  | "whitepaperPrompt"
+  | "feedTimeoutMs"
+  | "neuronGateThreshold"
+  | "whitepaperCjkThreshold"
 >;
 
 export type PipelineStep =
@@ -41,11 +53,53 @@ export type PostTrace = {
     finish_reason?: string;
     error: string | null;
   };
+  enrich?: {
+    before_classify?: { success: boolean; reason?: string; source?: string };
+    after_pass?: { success: boolean; reason?: string; source?: string };
+  };
   bullets: string;
 };
 
 const PREVIEW_HEAD = 120;
 const PREVIEW_TAIL = 80;
+
+export function isWhitepaperTag(config: Pick<AppConfig, "whitepaperFeeds">, tag: string): boolean {
+  return tag in config.whitepaperFeeds;
+}
+
+export function resolvePrompts(
+  config: Pick<AppConfig, "classifierPrompt" | "aiPrompt" | "whitepaperFeeds" | "whitepaperClassifierPrompt" | "whitepaperPrompt">,
+  tag: string,
+): { classifierPrompt: string; summaryPrompt: string } {
+  if (isWhitepaperTag(config, tag)) {
+    return {
+      classifierPrompt: config.whitepaperClassifierPrompt,
+      summaryPrompt: config.whitepaperPrompt,
+    };
+  }
+  return {
+    classifierPrompt: config.classifierPrompt,
+    summaryPrompt: config.aiPrompt,
+  };
+}
+
+/** Per-tag KV cursor: whitepaper tags use max processed post date; news feeds use `now`. */
+export function buildCursorUpdates(
+  successfulTags: string[],
+  config: Pick<AppConfig, "whitepaperFeeds">,
+  now: Date,
+  whitepaperMaxDates: Record<string, Date>,
+): Record<string, Date> {
+  const updates: Record<string, Date> = {};
+  for (const tag of successfulTags) {
+    if (isWhitepaperTag(config, tag) && whitepaperMaxDates[tag]) {
+      updates[tag] = whitepaperMaxDates[tag];
+    } else {
+      updates[tag] = now;
+    }
+  }
+  return updates;
+}
 
 export function bodyPreview(body: string) {
   if (!body) return { length: 0, preview_head: "", preview_tail: "" };
@@ -73,13 +127,63 @@ export function estimateNeurons(traces: Pick<PostTrace, "pipeline">[]): number {
   return total;
 }
 
+const ENRICH_NEURON_ESTIMATE = 40;
+
+async function maybeEnrich(
+  post: Post,
+  feed: NonNullable<ReturnType<typeof getWhitepaperFeedConfig>>,
+  env: { AI: Ai },
+  config: PipelineConfig,
+  opts: {
+    enrichBudget?: EnrichBudget;
+    kv?: KV;
+    skipNeuronGate?: boolean;
+    mode: "before_classify" | "after_pass";
+  },
+): Promise<{ body: string; meta?: PostTrace["enrich"] extends infer E ? E : never }> {
+  const needsBefore = feed.enrichBody && opts.mode === "before_classify";
+  const needsAfter =
+    opts.mode === "after_pass" && (feed.readPdf || feed.enrichAfterPass);
+  if (!needsBefore && !needsAfter) return { body: post.body };
+
+  if (opts.kv && !opts.skipNeuronGate) {
+    const ok = await opts.kv.canSpendNeurons(ENRICH_NEURON_ESTIMATE, config.neuronGateThreshold);
+    if (!ok) {
+      const key = opts.mode === "before_classify" ? "before_classify" : "after_pass";
+      return {
+        body: post.body,
+        meta: { [key]: { success: false, reason: "neuron_gate" } },
+      };
+    }
+  }
+
+  const result = await enrichPostBody(post.link, feed, env, {
+    timeoutMs: config.feedTimeoutMs,
+    budget: opts.enrichBudget,
+  });
+  const key = opts.mode === "before_classify" ? "before_classify" : "after_pass";
+  const meta = {
+    [key]: {
+      success: result.success,
+      reason: result.reason,
+      source: result.source,
+    },
+  };
+  if (result.success) return { body: result.body, meta };
+  return { body: post.body, meta };
+}
+
 export async function tracePost(
   post: Post,
   env: { AI: Ai },
-  ctx: { config: PipelineConfig; sentry?: any },
-  options: { skipSentry?: boolean } = {},
+  ctx: { config: PipelineConfig; sentry?: any; kv?: KV; enrichBudget?: EnrichBudget },
+  options: { skipSentry?: boolean; skipNeuronAccounting?: boolean } = {},
 ): Promise<PostTrace> {
   const config = ctx.config;
+  const feedConfig = getWhitepaperFeedConfig(config.whitepaperFeeds, post.tag);
+  let enrichMeta: PostTrace["enrich"];
+  let workingBody = post.body;
+
   const emptyClassifier: PostTrace["classifier"] = {
     raw_output: "",
     classification: "UNKNOWN",
@@ -93,31 +197,56 @@ export async function tracePost(
     error: null,
   };
 
-  if (!post.body) {
+  if (feedConfig?.enrichBody) {
+    const needsEnrich = !workingBody || workingBody.length < config.minBodyChars;
+    if (needsEnrich) {
+      const { body, meta } = await maybeEnrich(
+        { ...post, body: workingBody },
+        feedConfig,
+        env,
+        config,
+        {
+          enrichBudget: ctx.enrichBudget,
+          kv: ctx.kv,
+          skipNeuronGate: options.skipNeuronAccounting,
+          mode: "before_classify",
+        },
+      );
+      if (meta) enrichMeta = { ...enrichMeta, ...meta };
+      if (body) workingBody = body;
+    }
+  }
+
+  if (!workingBody) {
     return {
       pipeline: { step: "no_body", bare_header_reason: "no_body", logged_reasons: ["no_body"] },
       classifier: emptyClassifier,
       summary: emptySummary,
+      enrich: enrichMeta,
       bullets: "",
     };
   }
 
-  if (post.body.length < config.minBodyChars) {
+  if (workingBody.length < config.minBodyChars) {
     return {
       pipeline: { step: "body_too_short", bare_header_reason: "body_too_short", logged_reasons: ["body_too_short"] },
       classifier: emptyClassifier,
       summary: emptySummary,
+      enrich: enrichMeta,
       bullets: "",
     };
   }
 
   let classifier = { ...emptyClassifier };
   let classification: Classification = "UNKNOWN";
+  const classifyPost = { ...post, body: workingBody };
+  const { classifierPrompt, summaryPrompt } = resolvePrompts(config, post.tag);
+  const isWhitepaper = isWhitepaperTag(config, post.tag);
   try {
-    const res = await classifyPostDetailed(post, {
+    const res = await classifyPostDetailed(classifyPost, {
       ai: env.AI,
       model: config.aiModel,
-      prompt: config.classifierPrompt,
+      prompt: classifierPrompt,
       maxBodyChars: config.classifierMaxBodyChars,
     });
     classifier = { raw_output: res.rawOutput, classification: res.classification, error: null };
@@ -140,8 +269,26 @@ export async function tracePost(
       },
       classifier,
       summary: emptySummary,
+      enrich: enrichMeta,
       bullets: "",
     };
+  }
+
+  if (feedConfig && (feedConfig.readPdf || feedConfig.enrichAfterPass)) {
+    const { body, meta } = await maybeEnrich(
+      { ...post, body: workingBody },
+      feedConfig,
+      env,
+      config,
+      {
+        enrichBudget: ctx.enrichBudget,
+        kv: ctx.kv,
+        skipNeuronGate: options.skipNeuronAccounting,
+        mode: "after_pass",
+      },
+    );
+    if (meta) enrichMeta = { ...enrichMeta, ...meta };
+    if (body && meta?.after_pass?.success) workingBody = body;
   }
 
   const loggedReasons: string[] = [];
@@ -149,13 +296,15 @@ export async function tracePost(
 
   let summary = { ...emptySummary };
   let bullets = "";
+  const summarizePost = { ...post, body: workingBody };
   try {
-    const res = await summarizePostDetailed(post, {
+    const res = await summarizePostDetailed(summarizePost, {
       ai: env.AI,
       model: config.aiModel,
-      prompt: config.aiPrompt,
+      prompt: summaryPrompt,
       maxBodyTotal: config.maxBodyTotal,
       tailSize: config.tailSize,
+      cjkThreshold: isWhitepaper ? config.whitepaperCjkThreshold : undefined,
     });
     summary = {
       raw_output: res.rawOutput,
@@ -183,6 +332,7 @@ export async function tracePost(
       pipeline: { step: reason, bare_header_reason: reason, logged_reasons: loggedReasons },
       classifier,
       summary,
+      enrich: enrichMeta,
       bullets: "",
     };
   }
@@ -191,6 +341,7 @@ export async function tracePost(
     pipeline: { step: "ok", bare_header_reason: null, logged_reasons: loggedReasons },
     classifier,
     summary,
+    enrich: enrichMeta,
     bullets,
   };
 }

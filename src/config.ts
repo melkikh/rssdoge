@@ -1,3 +1,5 @@
+import type { WhitepaperFeedEntry } from "./enrich";
+
 export interface Env {
   RSSDOGE: KVNamespace;
   AI: Ai;
@@ -25,6 +27,14 @@ export interface AppConfig {
   feedTimeoutMs: number;
   postsPerMessage: number;
   feeds: Record<string, string>;
+  whitepaperFeeds: Record<string, WhitepaperFeedEntry>;
+  whitepaperClassifierPrompt: string;
+  whitepaperPrompt: string;
+  whitepaperMaxItemsPerRun: number;
+  pdfMaxItemsPerRun: number;
+  neuronDailyLimit: number;
+  neuronGateThreshold: number;
+  whitepaperCjkThreshold: number;
 }
 
 // Prompt text is identical for prod & dev — kept once here.
@@ -69,6 +79,57 @@ SKIP если пост:
 PASS если пост несёт техническое содержание: уязвимости, разбор атак, инженерные приёмы, исследования, инциденты, обзоры инструментов.
 
 Один пост — один ответ: PASS или SKIP.`;
+
+const WHITEPAPER_CLASSIFIER_PROMPT = `Ты классификатор научных статей и research-публикаций для канала прикладной безопасности.
+
+Отвечай ровно одним словом: PASS или SKIP. Без пояснений, без знаков препинания.
+
+PASS если статья несёт прикладное техсодержание:
+- внедряемые техники защиты, детект, мониторинг, hardening;
+- разбор реальных атак, инцидентов, кампаний, malware;
+- инструменты, тулинг, PoC, методики тестирования и red team;
+- прикладные домены: антифрод, аутентификация и identity, AI/agent security, сетевая безопасность, threat intel.
+
+SKIP если:
+- чистая теория, формальные доказательства, узкая криптографическая математика без практического применения;
+- маркетинг, анонс конференции/награды, PR без техсодержания;
+- пустой, бессмысленный или отсутствующий абстракт.
+
+Один пост — один ответ: PASS или SKIP.`;
+
+const WHITEPAPER_PROMPT = `Пишешь для безопасников и инженеров. Они знают терминологию: CVE, RCE, supply chain, MCP, LLM, differential privacy и т. п. — не объясняй базовые понятия.
+
+Язык вывода — только русский. Никаких иероглифов (китайский / японский / корейский). Устоявшиеся англоязычные технические термины оставляй латиницей, можно склонять. Названия продуктов, брендов, инструментов — пиши точно как в оригинале, латиницей. Никогда не транслитерируй их.
+
+В пользовательском сообщении даётся заголовок (Title) и текст (обычно абстракт research-статьи). Если текст длинный — сшиты начало и конец, середина «...» — опирайся на то, что попало в запрос.
+
+Опирайся только на факты из текста. Не выдумывай CVE-ID, версии, имена, атрибуцию.
+
+Тон: как коллеге за кофе, по делу. Без канцелярита и пафоса. Без вводных «в статье говорится», «автор рассказывает» — сразу к сути.
+
+Фокус summary для research:
+- в чём новый подход или результат (чем отличается от известного);
+- чем это практически полезно инженеру или blue team;
+- где применимо (продукты, домены, сценарии атак/защиты).
+
+Длина — по объёму содержания. Если по сути 2 буллита — выдай 2. Максимум 9. Лучше плотно и коротко.
+
+Запрещено:
+- дублировать информацию между буллитами;
+- капитанские выводы и общие фразы;
+- метакомментарии о тексте;
+- переводить устоявшиеся англоязычные термины;
+- финальные «итого» / «вывод»;
+- любой markdown — только plain text.
+
+Формат: только пункты, каждый с новой строки, с "- "; без вступления и без финального обобщения.`;
+
+const WHITEPAPER_FEEDS: Record<string, WhitepaperFeedEntry> = {
+  arxiv_cscr: { url: "https://rss.arxiv.org/rss/cs.CR", readPdf: true },
+  elastic_security_labs: "https://www.elastic.co/security-labs/rss/feed.xml",
+  google_research: { url: "https://research.google/blog/rss", enrichBody: true },
+  portswigger_research: { url: "https://portswigger.net/research/rss", enrichAfterPass: true },
+};
 
 const FEEDS_PRODUCTION: Record<string, string> = {
   netsec: "https://reddit.com/r/netsec.rss",
@@ -123,6 +184,14 @@ export default function config(env: Env): AppConfig {
     tailSize: 1500,
     feedTimeoutMs: 10000,
     postsPerMessage: 5,
+    whitepaperFeeds: WHITEPAPER_FEEDS,
+    whitepaperClassifierPrompt: WHITEPAPER_CLASSIFIER_PROMPT,
+    whitepaperPrompt: WHITEPAPER_PROMPT,
+    whitepaperMaxItemsPerRun: 10,
+    pdfMaxItemsPerRun: 5,
+    neuronDailyLimit: 10000,
+    neuronGateThreshold: 8000,
+    whitepaperCjkThreshold: 8,
   };
 
   const environments: Record<string, AppConfig> = {

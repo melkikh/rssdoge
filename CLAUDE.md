@@ -48,11 +48,11 @@ OpenAI-style models (e.g. `@cf/zai-org/glm-4.7-flash`) return `result.choices[0]
 
 ### Two-step LLM pipeline: classify → summarize
 
-For each post with a non-empty `body`, `tracePost()` (`src/pipeline.ts`) runs `classifyPostDetailed()` first (`max_completion_tokens: 10`, one token `PASS`/`SKIP`), then — only if not `SKIP` — `summarizePostDetailed()`. Both take an options object (`{ ai, model, prompt, ... }`). Same model (GLM), different prompts (`classifierPrompt` / `aiPrompt`). More reliable than one hybrid prompt: a small focused classifier task vs. a large multi-task summary.
+For each post with a non-empty `body`, `tracePost()` (`src/pipeline.ts`) runs `classifyPostDetailed()` first (`max_completion_tokens: 10`, one token `PASS`/`SKIP`), then — only if not `SKIP` — `summarizePostDetailed()`. Both take an options object (`{ ai, model, prompt, ... }`). Same model (GLM), different prompts. **Prompt pair is chosen per tag** via `resolvePrompts(config, tag)`: whitepaper feeds (`whitepaperFeeds`) get `whitepaperClassifierPrompt` / `whitepaperPrompt`; everything else gets `classifierPrompt` / `aiPrompt`. More reliable than one hybrid prompt: a small focused classifier task vs. a large multi-task summary.
 
 The classifier returns `PASS` / `SKIP` / `UNKNOWN`. On `UNKNOWN` — fall through to summary (don't drop the post) + warning in Glitchtip. `SKIP` is sent silently as a bare header (by design; add logging behind a flag if you want visibility into false-positive skips).
 
-Safety net: if the summary model still outputs `__SKIP_BULLETS__` (the prompt no longer mentions it), `index.ts` catches it and turns it into a bare header.
+Safety net: if the summary model still outputs `__SKIP_BULLETS__` (the prompt no longer mentions it), `tracePost()` (`src/pipeline.ts`) catches it and turns it into a bare header.
 
 ### Empty bullets are a feature — five causes
 
@@ -78,7 +78,7 @@ On rejection (CJK), `SummaryResult.rejectedReason = "cjk"` — this tag goes to 
 
 ### KV cursor advances only for successful tags
 
-`ctx.kv.updateValues(...)` in `finally` (`src/index.ts`) receives not all `Object.keys(feeds)`, but only those **not in `failedTags`**. A tag is added to `failedTags` on (a) `fetchFeed` failure, (b) `bot.sendMessage` failure on a chunk that included a post from that tag.
+`ctx.kv.updateValues(...)` in `finally` (`src/index.ts`) receives a **per-tag** `Record<string, Date>`, not a single timestamp. Built by `buildCursorUpdates()`: for **news feeds** the cursor is `now`; for **whitepaper tags** it is the **max `date` of posts actually processed** in that run (oldest-first drain under `whitepaperMaxItemsPerRun`). Only tags **not in `failedTags`** are updated. A tag is added to `failedTags` on (a) `fetchFeed` failure, (b) `bot.sendMessage` failure on a chunk that included a post from that tag.
 
 Trade-off: if one post from a tag fails but another from the same tag succeeds — the cursor won't move and the second post will be resent on the next cron run (duplicate). Deliberate choice: priority is not losing posts; a duplicate is acceptable. Per-post tracking would require a separate KV key per post.
 
@@ -90,7 +90,7 @@ On send failure, the **chunk** fails, not the whole batch: only tags of posts in
 
 ### Workers AI free tier — 10k neurons/day
 
-Shared budget across models. Rough estimate at current cron schedule (`0,30 9-18 mon-fri`, 20 runs × ~3 posts × ~40 neurons) — ~2400 n/day, 4× headroom. Recalculate when changing models or increasing `updateCount`/`postsPerMessage`. The classifier is cheap (`max_completion_tokens: 10`), its contribution is negligible. Heavy models may not fit the daily limit at the current cron schedule.
+Shared budget across models. Rough estimate at current cron schedule (`0,30 9-18 mon-fri`, 20 runs): blog path ~2400 n/day (4× headroom); with whitepaper feeds in the random pool add ~200 classify + ~100 summarize/day (10 items × 2 whitepaper feeds, not every run). Still well under 10k — see **Quotas and limits** below. Recalculate when changing models, `updateCount`, `whitepaperMaxItemsPerRun`, or cron. The classifier is cheap (`max_completion_tokens: 10`), its contribution is negligible. Heavy models may not fit the daily limit at the current cron schedule.
 
 ### Reasoning models consume `max_completion_tokens` on thinking
 
@@ -104,6 +104,64 @@ GLM-4.7-flash and similar reasoning models default to `enable_thinking=true`. Bu
 
 `scope.setLevel("warning")` + `scope.captureMessage(...)` in toucan-js/Glitchtip is **silently dropped** — 0 warning events in the dashboard over 90 days, only errors. Either toucan doesn't propagate level from scope to event, or Glitchtip filters them. Workaround: for "non-fatal but important" signals use `scope.captureException(new Error("Post ended as bare header: ..."))` — they arrive reliably, at the cost of appearing as errors in the dashboard. For grouping by cause use tag `reason` — Glitchtip filter `tag:reason:summary_cjk` works.
 
+### Whitepaper sources (abstract-first)
+
+Body comes straight from RSS where available; fuller text via `env.AI.toMarkdown()` when configured.
+
+Feeds in `WHITEPAPER_FEEDS` (`src/config.ts`):
+- **arXiv cs.CR** — abstract in RSS; after PASS fetches PDF (`readPdf: true`)
+- **Elastic Security Labs** — full text in `content:encoded` (RSS only)
+- **Google Research blog** — no body in RSS; fetches page before classify (`enrichBody: true`)
+- **PortSwigger Research** — RSS teaser ~250 chars; fetches full page after PASS (`enrichAfterPass: true`)
+
+**Rejected earlier:** IACR ePrint (pure theory + fetch issues).
+
+Flow: `fetchFeed()` → `tracePost()`. Enrichment (`src/enrich.ts`): our `fetch(link)` → blob → `env.AI.toMarkdown()` — converter only, not a crawler. Runs before classify (missing body) or after PASS (PDF/full page). Budget: `pdfMaxItemsPerRun` (default 5/run) + KV neuron gate (`neuronGateThreshold` 8000, key `neurons:<UTC-date>`).
+
+Whitepaper posts share the same `Post` type. Domain filter: `whitepaperClassifierPrompt`. Input cap: `whitepaperMaxItemsPerRun` (10), **oldest-first**. CJK sanitizer threshold relaxed for whitepapers (`whitepaperCjkThreshold: 8` vs 2).
+
+### Prompt routing by tag
+
+`isWhitepaperTag(config, tag)` and `resolvePrompts(config, tag)` in `src/pipeline.ts`. Whitepaper tags → `whitepaperClassifierPrompt` / `whitepaperPrompt`; else → default pair. Same check drives Telegram category tag (single source of truth).
+
+### Category tag `#whitepaper` in Telegram
+
+`createPostMarkdown(post, bullets, category?)` (`src/utils.ts`): whitepaper tags get `#whitepaper #<tag> <title>` instead of `#<tag> <title>`. Applied on bare headers too.
+
+### Tag-scoped RSS feeds
+
+`feeds` / `whitepaperFeeds` are already `tag → url`. Topic slices work as separate tags (e.g. `simonwillison.net/tags/security.atom`). Optional helper pattern: `tagFeeds(base, prefix, tags[])` in config. **Cross-feed dedup:** `fetchFeed` dedupes by `link` within one feed only; overlapping tag feeds from the same source may duplicate (same trade-off as resend-on-partial-failure).
+
+### Quotas and limits (Cloudflare free tier)
+
+| Limit | Free | Where it bites |
+|-------|------|----------------|
+| CPU per cron | 10 ms | XML parse + `stripHtml` on large feeds (arXiv ~50–100 entries) |
+| Wall-time per cron | 15 min | Total fetch + AI per run |
+| **Subrequests / invocation** | **50** | **Main ceiling** for future PDF stage |
+| Workers AI neurons/day | 10 000 | Summarize; classify negligible |
+
+Resets at **00:00 UTC**. Subrequests count: `fetch(feed)`, `fetch(pdf/page)`, `bot.sendMessage`, `ai.run`, `env.AI.toMarkdown()`.
+
+**KV neuron counter:** `KV.neuronsKey()` → `neurons:<YYYY-MM-DD>` (UTC). `addNeuronEstimate()` after each post in cron; `canSpendNeurons()` gates enrich before `fetch`+`toMarkdown`. Estimate only (~2 classify, ~40 summarize per post), not exact billing.
+
+**Enrich budget:** `pdfMaxItemsPerRun` (5) caps `fetch`+`toMarkdown` per cron/debug run — main guard on free-tier 50 subrequests/invocation.
+
 ### Debug endpoint — pipeline dry-run
 
-`POST /debug/tag/:tag` (auth = same Bearer / `TELEGRAM_TOKEN` in prod; auth disabled in dev). Runs fetch → classify → summarize, returns JSON with `pipeline.step`, `feed_raw`, `classifier`, `summary`, `would_send`. **Does not send to Telegram, does not advance KV.** Query: `?since=<ISO>` (cursor override), `?limit=N` (default 3, max 20). Post logic — `tracePost()` in `src/pipeline.ts` (same path as cron). Skill client: `dotenvx run -- node .claude/skills/debug/debug.mjs tag <tag>` — needs `TELEGRAM_TOKEN` in `.env` (same value as the worker secret; CLI doesn't read Cloudflare secrets).
+`POST /debug/tag/:tag` (auth = same Bearer / `TELEGRAM_TOKEN` in prod; auth disabled in dev). Runs fetch → classify → summarize, returns JSON with `pipeline.step`, `feed_raw`, `classifier`, `summary`, `would_send`. **Does not send to Telegram, does not advance KV.** Works for both blog and whitepaper tags (`allFeeds`). Query: `?since=<ISO>` (cursor override), `?limit=N` (default 3, max 20). Post logic — `tracePost()` in `src/pipeline.ts` (same path as cron). Skill client: `dotenvx run -- node .claude/skills/debug/debug.mjs tag <tag>` — needs `TELEGRAM_TOKEN` in `.env` (same value as the worker secret; CLI doesn't read Cloudflare secrets). Example: `tag arxiv_cscr`.
+
+### Running locally — three loops, fastest first
+
+1. **Logic only (offline, no Cloudflare):** `npm test` / `npm run check`. Tests are plain `vitest run` — no config file, no workerd, no `@cloudflare/vitest-pool-workers` (not installed). They import `src/*` directly and run in node. This is the main inner loop; most pipeline logic (`sanitizeBullets`, `tracePost`, feed parsing, `chunkParts`) is covered here without booting a worker.
+2. **Pipeline via `wrangler dev` (no Telegram, no KV writes):** terminal A `npm run dev` (dotenvx decrypts `.env` → `wrangler dev --port 3000`, `ENVIRONMENT=development` → `development` config branch: `authentication: false`, dev feeds, dev chatID). Terminal B: `RSSDOGE_BASE_URL=http://127.0.0.1:3000 dotenvx run -- node .claude/skills/debug/debug.mjs tag <tag>`. Uses the debug endpoint (above) — dry-run, no send, no cursor move.
+
+**Gotcha — Workers AI has no local emulation.** `wrangler dev` proxies every `ai.run(...)` to the real Cloudflare API, so local dev needs an authenticated wrangler (`wrangler login`, or `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` in env). Without it AI calls fail and posts come back as bare headers with no obvious error — the usual reason "local debug doesn't work". KV, in contrast, runs locally from `.wrangler/` (dev cursors, not prod).
+
+**tsconfig `types`:** keep it at `["@cloudflare/workers-types"]`. Do **not** re-add `@cloudflare/vitest-pool-workers` or `vite/client` — neither is installed, and listing an uninstalled package in `types` makes `tsc` fail. The vitest pool isn't used (see loop 1).
+
+### Deploy runs a gate: typecheck + tests
+
+All of `src/` is TypeScript and `tsc --noEmit` is clean — keep it that way (no CI enforces it; the gate is at deploy time). `npm run deploy` runs `npm run check` (`tsc --noEmit` + `vitest run`) **and** the dry-run `build` before the real `wrangler deploy`; any failure aborts the deploy. Run `npm run check` yourself before finishing a change — a type error or a failing test will block the next manual deploy. Tests are in `tests/` (vitest): `sanitizeBullets`, `tracePost`, feed body extraction, and `chunkParts` / `createPostMarkdown` / `sortDate`.
+
+Functions with many similar-typed params take an options object (`classifyPostDetailed`/`summarizePostDetailed` in `src/ai.ts`, `fetchFeed` in `src/feed.ts`) — pass named fields, not positional args.

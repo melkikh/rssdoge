@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { coerceToString, entryBodyFromFeedEntry } from "../src/feed";
 
+// Shape from feed-extractor for arXiv cs.CR RSS entries (abstract in description)
+const arxivEntry = {
+  title: "Practical Defenses Against Prompt Injection in LLM Agents",
+  link: "https://arxiv.org/abs/2601.12345",
+  published: "2026-07-06T18:00:00Z",
+  description:
+    "We present a layered defense architecture for LLM-based agents that combines input sanitization, tool-call sandboxing, and runtime policy enforcement. Our evaluation on three real-world agent workflows shows a 94% reduction in successful prompt-injection attacks while preserving task completion rates. We release an open-source reference implementation and discuss deployment trade-offs for production systems.",
+};
+
 // Shape produced by feed-extractor + fast-xml-parser for tests/fixtures/schneier-atom.xml
 const schneierEntry = {
   content: {
@@ -33,5 +42,14 @@ describe("entryBodyFromFeedEntry", () => {
       source_field: "content",
       keys: ["#text", "@_type"],
     });
+  });
+
+  it("extracts arXiv cs.CR abstract from description (≥ minBodyChars)", () => {
+    const { body, feedRaw } = entryBodyFromFeedEntry(arxivEntry, 10000, true);
+
+    expect(body.length).toBeGreaterThan(100);
+    expect(body).toContain("prompt-injection");
+    expect(body).toContain("layered defense");
+    expect(feedRaw?.source_field).toBe("description");
   });
 });
