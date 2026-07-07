@@ -1,28 +1,26 @@
 import { Toucan } from 'toucan-js';
+import type { Env } from "./config";
 
-export function sortDate (a, b) {
-  let aDate = new Date(a.date);
-  let bDate = new Date(b.date);
-  if (aDate < bDate) {
-    return 1;
-  } else if (aDate === bDate) {
-    return 0;
-  } else {
-    return -1;
-  }
-};
+/** Newest first. Returns 0 for equal timestamps (a valid, consistent comparator). */
+export function sortDate(a: { date: Date | string }, b: { date: Date | string }): number {
+  return new Date(b.date).getTime() - new Date(a.date).getTime();
+}
 
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-export function createPostMarkdown(post, bullets: string): string {
+export function createPostMarkdown(
+  post: { title?: string; tag?: string; link: string },
+  bullets: string,
+): string {
   const title = escapeHtml(post.title || "");
   const tag = escapeHtml(post.tag || "");
-  const header = `#${tag} <a href="${post.link}">${title}</a>`;
+  const header = `#${tag} <a href="${escapeHtml(post.link)}">${title}</a>`;
   if (!bullets) return header;
   return `${header}\n${escapeHtml(bullets)}`;
 }
@@ -81,20 +79,26 @@ function truncateOnNewline(text: string, max: number): string {
 }
 
 
-export function initSentry(request, env, context) {
-  const sentry = new Toucan({
+export function initSentry(request: unknown, env: Env, context: ExecutionContext): Toucan {
+  return new Toucan({
     dsn: env.SENTRY_DSN,
-    release: '1.0.2',
+    release: env.RELEASE,
     context,
-    request,
+    request: request as Request | undefined,
   });
-  return sentry;
-};
+}
 
-export function randomMapElements(input, count) {
-  const map = new Map(Object.entries(input));
-  const keys = Array.from(map.keys());
-  const shuffled = keys.sort(() => 0.5 - Math.random());
-  const result = new Map(shuffled.slice(0, count).map(key => [key, map.get(key)]));
-  return Object.fromEntries(result);
+/** Uniform Fisher–Yates pick of up to `count` entries — order of the result is random. */
+export function randomMapElements(
+  input: Record<string, string>,
+  count: number,
+): Record<string, string> {
+  const keys = Object.keys(input);
+  for (let i = keys.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [keys[i], keys[j]] = [keys[j], keys[i]];
+  }
+  const result: Record<string, string> = {};
+  for (const key of keys.slice(0, count)) result[key] = input[key];
+  return result;
 }

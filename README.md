@@ -14,6 +14,6 @@ Here is an example of a Telegram channel that provides security-related content 
    echo -ne $TELEGRAM_TOKEN | wrangler secret put TELEGRAM_TOKEN
    echo -ne $SENTRY_DSN | wrangler secret put SENTRY_DSN
    ```
-3. Configure feeds, chat ID, and AI prompt in `src/config.js`.
+3. Configure feeds, chat ID, and AI prompt in `src/config.ts`.
 4. Configure the cron schedule in `wrangler.toml`.
-5. Deploy: `npm run deploy`.
+5. Deploy: `npm run deploy` (runs `npm run check` — typecheck + tests — and a dry-run build first; aborts if any fails). Run `npm run check` anytime to verify without deploying.

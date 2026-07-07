@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Schneier on Security</title>
+  <link href="https://www.schneier.com/feed/atom" rel="self"/>
+  <entry>
+    <title>France Quantum Initiative</title>
+    <link href="https://www.schneier.com/blog/archives/2026/07/france-quantum.html" rel="alternate"/>
+    <published>2026-07-06T08:00:00+00:00</published>
+    <updated>2026-07-06T08:00:00+00:00</updated>
+    <content type="html">&lt;p&gt;France is investing heavily in quantum-resistant cryptography as part of a national strategy to prepare critical infrastructure for post-quantum threats. The initiative covers government networks, financial systems, and telecom operators.&lt;/p&gt;&lt;p&gt;Officials emphasized migration timelines aligned with NIST standards and coordination with EU partners on quantum-safe protocols.&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <title>Older Post</title>
+    <link href="https://www.schneier.com/blog/archives/2026/01/old-post.html" rel="alternate"/>
+    <published>2026-01-01T08:00:00+00:00</published>
+    <updated>2026-01-01T08:00:00+00:00</updated>
+    <content type="html">&lt;p&gt;This post is too old for the test window.&lt;/p&gt;</content>
+  </entry>
+</feed>

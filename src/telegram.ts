@@ -1,10 +1,13 @@
 export class Telegram {
-  constructor(props) {
+  private chatID: string;
+  private token: string;
+
+  constructor(props: { token: string; chatID: string }) {
     this.chatID = props.chatID;
     this.token = props.token;
   }
 
-  async sendMessage(message) {
+  async sendMessage(message: string): Promise<void> {
     const data = {
       chat_id: this.chatID,
       text: message,

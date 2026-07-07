@@ -106,3 +106,7 @@ dist
 .wrangler/
 .env.keys
 
+# Local agent-loop artifacts (see CLAUDE.md)
+plans/
+/*-plan.md
+/issues.md

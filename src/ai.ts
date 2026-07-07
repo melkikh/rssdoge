@@ -10,14 +10,12 @@ function extractContent(result: any): string {
   return (result?.choices?.[0]?.message?.content ?? result?.response ?? "").trim();
 }
 
-export async function classifyPost(
+export async function classifyPostDetailed(
   post: { title: string | undefined; body: string },
-  ai: any,
-  model: string,
-  prompt: string,
-  maxBodyChars: number,
-): Promise<Classification> {
-  if (!ai) return "UNKNOWN";
+  opts: { ai: Ai; model: string; prompt: string; maxBodyChars: number },
+): Promise<{ classification: Classification; rawOutput: string }> {
+  const { ai, model, prompt, maxBodyChars } = opts;
+  if (!ai) return { classification: "UNKNOWN", rawOutput: "" };
   const bodyText = post.body ? post.body.slice(0, maxBodyChars) : "(no body)";
   const text = `Title: ${post.title}\n\n${bodyText}`;
   const result: any = await ai.run(model, {
@@ -28,10 +26,11 @@ export async function classifyPost(
     max_completion_tokens: 10,
     chat_template_kwargs: { enable_thinking: false },
   });
-  const raw = extractContent(result).toUpperCase();
-  if (raw.includes("SKIP")) return "SKIP";
-  if (raw.includes("PASS")) return "PASS";
-  return "UNKNOWN";
+  const rawOutput = extractContent(result);
+  const raw = rawOutput.toUpperCase();
+  if (raw.includes("SKIP")) return { classification: "SKIP", rawOutput };
+  if (raw.includes("PASS")) return { classification: "PASS", rawOutput };
+  return { classification: "UNKNOWN", rawOutput };
 }
 
 function hasTooManyCJK(text: string): boolean {
@@ -66,7 +65,7 @@ function normalizeBullets(text: string): string {
   }).join("\n");
 }
 
-function sanitizeBullets(raw: string): { bullets: string; rejectedReason?: "cjk" | "empty" } {
+export function sanitizeBullets(raw: string): { bullets: string; rejectedReason?: "cjk" | "empty" } {
   const trimmed = raw.trim();
   if (!trimmed) return { bullets: "", rejectedReason: "empty" };
   if (hasTooManyCJK(trimmed)) return { bullets: "", rejectedReason: "cjk" };
@@ -75,8 +74,12 @@ function sanitizeBullets(raw: string): { bullets: string; rejectedReason?: "cjk"
   return { bullets: cleaned };
 }
 
-export async function summarizePost(post: {title: string | undefined, body: string}, ai: any, model: string, prompt: string, maxBodyTotal: number, tailSize: number): Promise<SummaryResult> {
-  if (!ai) return { bullets: "", finishReason: undefined };
+export async function summarizePostDetailed(
+  post: { title: string | undefined; body: string },
+  opts: { ai: Ai; model: string; prompt: string; maxBodyTotal: number; tailSize: number },
+): Promise<SummaryResult & { rawOutput: string }> {
+  const { ai, model, prompt, maxBodyTotal, tailSize } = opts;
+  if (!ai) return { bullets: "", finishReason: undefined, rawOutput: "" };
   if (!post.body) throw new Error(`Post '${post.title}' has no body`);
 
   let bodyText: string;
@@ -91,17 +94,14 @@ export async function summarizePost(post: {title: string | undefined, body: stri
 
   const result: any = await ai.run(model, {
     messages: [
-      {
-        role: "system",
-        content: prompt,
-      },
+      { role: "system", content: prompt },
       { role: "user", content: text },
     ],
     max_completion_tokens: 2000,
     chat_template_kwargs: { enable_thinking: false },
   });
   const choice = result?.choices?.[0];
-  const raw = extractContent(result);
-  const { bullets, rejectedReason } = sanitizeBullets(raw);
-  return { bullets, finishReason: choice?.finish_reason, rejectedReason };
+  const rawOutput = extractContent(result);
+  const { bullets, rejectedReason } = sanitizeBullets(rawOutput);
+  return { bullets, finishReason: choice?.finish_reason, rejectedReason, rawOutput };
 }

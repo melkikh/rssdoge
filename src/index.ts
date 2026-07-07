@@ -1,19 +1,23 @@
 import '@cloudflare/workers-types';
-import { Router, error, json } from "itty-router";
-import config from "./config";
+import { Router, error, json, type IRequest } from "itty-router";
+import type { Toucan } from "toucan-js";
+import config, { type Env, type AppConfig } from "./config";
 import { Telegram } from "./telegram";
 import { KV } from "./kv";
 import { fetchFeed } from "./feed";
+import type { Post } from "./feed";
 import { sortDate, createPostMarkdown, initSentry, randomMapElements, chunkParts } from "./utils";
-import { summarizePost, classifyPost } from "./ai";
+import { tracePost, bodyPreview, estimateNeurons } from "./pipeline";
+import type { PostTrace } from "./pipeline";
 
-interface Env {
-  RSSDOGE: KVNamespace;
-  AI: Ai;
-}
+/** Cloudflare's ExecutionContext with the app singletons we attach per request/cron. */
+type Ctx = ExecutionContext & {
+  config: AppConfig;
+  kv: KV;
+  sentry: Toucan;
+};
 
-
-const authMiddleware = (request, env, ctx) => {
+const authMiddleware = (request: IRequest, env: Env, ctx: Ctx) => {
   const authn = ctx.config.authentication;
   if (!authn) return;
 
@@ -30,23 +34,23 @@ const authMiddleware = (request, env, ctx) => {
   if (!isValid) return error(401, "Unauthorized");
 };
 
-async function statusHandler(request, env, ctx) {
+async function versionHandler(request: IRequest, env: Env) {
+  return json({
+    built_at: env.BUILD_TIME ?? null,
+    release: env.RELEASE ?? null,
+    environment: env.ENVIRONMENT ?? null,
+  });
+}
+
+async function indexHandler(request: IRequest, env: Env, ctx: Ctx) {
   const ages = await ctx.kv.getAll();
-  return json(ages)
+  const tags = Object.keys(ctx.config.feeds)
+    .sort()
+    .map((tag) => ({ tag, updated_at: ages[tag] ?? null }));
+  return json({ tags });
 }
 
-async function indexHandler(request, env, ctx) {
-  const ages = await ctx.kv.getAll();
-  const { content } = await getContent(ctx, ctx.config.feeds, ages);
-  return json(content)
-}
-
-async function updateHandler(request, env, ctx) {
-  await processEvent(request, env, ctx);
-  return json({status: 'ok'})
-}
-
-async function getContent(ctx, feeds, ages) {
+async function getContent(ctx: Ctx, feeds: Record<string, string>, ages: Record<string, string>) {
   const failedTags = new Set<string>();
   const results = await Promise.all(
     Object.keys(feeds).map(async (tag) => {
@@ -54,7 +58,12 @@ async function getContent(ctx, feeds, ages) {
       try {
         const url = feeds[tag];
         const start = performance.now();
-        const items = await fetchFeed(url, sinceDate, tag, ctx.config.maxBodyTotal, ctx.config.feedTimeoutMs);
+        const items = await fetchFeed(url, {
+          since: sinceDate,
+          tag,
+          maxBodyTotal: ctx.config.maxBodyTotal,
+          timeoutMs: ctx.config.feedTimeoutMs,
+        });
         const end = performance.now();
         console.log(`Fetching '${tag}' feed took ${end - start}ms`);
         return items;
@@ -71,7 +80,115 @@ async function getContent(ctx, feeds, ages) {
   return { content, failedTags };
 }
 
-async function processEvent(event, env, ctx) {
+const ALERT_REASONS = new Set(["no_body", "body_too_short", "classified_unknown", "summary_empty", "summary_cjk"]);
+
+function logBareHeader(ctx: Ctx, post: Post, reason: string, extra?: Record<string, any>) {
+  const bodyLen = post.body?.length ?? 0;
+  console.log(`[bare-header] ${reason} [${post.tag}] '${post.title}' body_len=${bodyLen}`);
+  if (!ALERT_REASONS.has(reason)) return;
+  ctx.sentry.withScope(scope => {
+    scope.setTag("tag", post.tag);
+    scope.setTag("reason", reason);
+    scope.setExtra("title", post.title ?? "");
+    scope.setExtra("link", post.link);
+    scope.setExtra("body_length", bodyLen);
+    if (extra) for (const [k, v] of Object.entries(extra)) scope.setExtra(k, v);
+    scope.captureException(new Error(`Post ended as bare header: ${reason}`));
+  });
+}
+
+function logTraceBareHeaders(ctx: Ctx, post: Post, trace: PostTrace) {
+  for (const reason of trace.pipeline.logged_reasons) {
+    const extra =
+      reason === "summary_empty" || reason === "summary_cjk"
+        ? {
+            finish_reason: trace.summary.finish_reason ?? "missing",
+            classification: trace.classifier.classification,
+          }
+        : undefined;
+    logBareHeader(ctx, post, reason, extra);
+  }
+}
+
+function formatDebugPost(post: Post, trace: PostTrace) {
+  return {
+    title: post.title,
+    link: post.link,
+    date: post.date.toISOString(),
+    body: bodyPreview(post.body),
+    feed_raw: post.feedRaw ?? null,
+    pipeline: trace.pipeline,
+    classifier: trace.classifier,
+    summary: trace.summary,
+    would_send: createPostMarkdown(post, trace.bullets),
+  };
+}
+
+async function debugTagHandler(request: IRequest, env: Env, ctx: Ctx) {
+  const tag = request.params?.tag;
+  const feeds = ctx.config.feeds;
+
+  if (!tag || !feeds[tag]) {
+    return json({ error: "unknown tag", tag }, { status: 400 });
+  }
+
+  const feedUrl = feeds[tag];
+  const url = new URL(request.url);
+  const limitParam = parseInt(url.searchParams.get("limit") || "3", 10);
+  const limit = Math.min(Math.max(limitParam || 3, 1), 20);
+
+  const ages = await ctx.kv.getAll();
+  let since: Date;
+  let since_source: "query" | "kv" | "epoch";
+  const sinceParam = url.searchParams.get("since");
+  if (sinceParam) {
+    since = new Date(sinceParam);
+    since_source = "query";
+  } else if (ages[tag]) {
+    since = new Date(ages[tag]);
+    since_source = "kv";
+  } else {
+    since = new Date(0);
+    since_source = "epoch";
+  }
+
+  let posts: Post[];
+  try {
+    posts = await fetchFeed(feedUrl, {
+      since,
+      tag,
+      maxBodyTotal: ctx.config.maxBodyTotal,
+      timeoutMs: ctx.config.feedTimeoutMs,
+      captureRaw: true,
+    });
+  } catch (err) {
+    return json({ error: String(err), tag, feed_url: feedUrl }, { status: 502 });
+  }
+
+  posts.sort(sortDate);
+  posts = posts.slice(0, limit);
+
+  const traces = await Promise.all(
+    posts.map(async (post) => {
+      const trace = await tracePost(post, env, ctx, { skipSentry: true });
+      return formatDebugPost(post, trace);
+    }),
+  );
+
+  return json({
+    tag,
+    feed_url: feedUrl,
+    since: since.toISOString(),
+    since_source,
+    posts: traces,
+    neurons_estimate: estimateNeurons(
+      traces.map((p) => ({ pipeline: p.pipeline })),
+    ),
+    dry_run: true,
+  });
+}
+
+async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
   const now = new Date();
   const bot = new Telegram({
     token: ctx.config.telegramToken,
@@ -84,64 +201,12 @@ async function processEvent(event, env, ctx) {
   try {
     for (let i = 0; i < content.length; i += ctx.config.postsPerMessage) {
       const batch = content.slice(i, i + ctx.config.postsPerMessage);
-      const parts: { post: any, text: string }[] = [];
+      const parts: { post: Post; text: string }[] = [];
 
       for (const post of batch) {
-        if (!post.body) {
-          parts.push({ post, text: createPostMarkdown(post, "") });
-          continue;
-        }
-
-        let classification: "PASS" | "SKIP" | "UNKNOWN" = "UNKNOWN";
-        try {
-          classification = await classifyPost(post, env.AI, ctx.config.aiModel, ctx.config.classifierPrompt, ctx.config.classifierMaxBodyChars);
-        } catch (err) {
-          ctx.sentry.captureException(new Error(`Failed to classify post '${post.title}' [${post.tag}]`, { cause: err }));
-        }
-
-        if (classification === "SKIP") {
-          parts.push({ post, text: createPostMarkdown(post, "") });
-          continue;
-        }
-
-        if (classification === "UNKNOWN") {
-          ctx.sentry.withScope(scope => {
-            scope.setLevel("warning");
-            scope.setTag("tag", post.tag);
-            scope.setTag("model", ctx.config.aiModel);
-            scope.setExtra("title", post.title ?? "");
-            scope.setExtra("link", post.link);
-            scope.captureMessage(`Classifier returned UNKNOWN [${post.tag}] '${post.title}'`);
-          });
-        }
-
-        let bullets = "";
-        let finishReason: string | undefined;
-        let rejectedReason: string | undefined;
-        try {
-          const res = await summarizePost(post, env.AI, ctx.config.aiModel, ctx.config.aiPrompt, ctx.config.maxBodyTotal, ctx.config.tailSize);
-          bullets = res.bullets;
-          finishReason = res.finishReason;
-          rejectedReason = res.rejectedReason;
-          if (!bullets) {
-            ctx.sentry.withScope(scope => {
-              scope.setLevel("warning");
-              scope.setTag("tag", post.tag);
-              scope.setTag("model", ctx.config.aiModel);
-              scope.setTag("finish_reason", finishReason ?? "missing");
-              scope.setTag("rejected_reason", rejectedReason ?? "empty");
-              scope.setTag("classification", classification);
-              scope.setExtra("title", post.title ?? "");
-              scope.setExtra("link", post.link);
-              scope.setExtra("body_length", post.body.length);
-              scope.captureMessage(`Empty summary [${post.tag}] '${post.title}'`);
-            });
-          }
-        } catch (err) {
-          ctx.sentry.captureException(new Error(`Failed to summarize post '${post.title}' [${post.tag}]`, { cause: err }));
-        }
-        if (bullets.trim() === "__SKIP_BULLETS__") bullets = "";
-        parts.push({ post, text: createPostMarkdown(post, bullets) });
+        const trace = await tracePost(post, env, ctx);
+        logTraceBareHeaders(ctx, post, trace);
+        parts.push({ post, text: createPostMarkdown(post, trace.bullets) });
       }
 
       if (parts.length === 0) continue;
@@ -167,22 +232,24 @@ async function processEvent(event, env, ctx) {
 const router = Router({ base: "/" });
 
 router
-  .get("/ping", statusHandler)
+  .get("/version", versionHandler)
   .get("/", authMiddleware, indexHandler)
-  .post("/update", authMiddleware, updateHandler)
+  .post("/debug/tag/:tag", authMiddleware, debugTagHandler)
   .all("*", () => error(404));
 
 export default {
-  async fetch (request, env, context) {
-    context.config = config(env);
-    context.kv = new KV({ kv: env.RSSDOGE });
-    context.sentry = initSentry(request, env, context);
-    return await router.handle(request, env, context).then(json).catch(error)
+  async fetch(request: Request, env: Env, context: ExecutionContext) {
+    const ctx = context as Ctx;
+    ctx.config = config(env);
+    ctx.kv = new KV({ kv: env.RSSDOGE });
+    ctx.sentry = initSentry(request, env, ctx);
+    return await router.handle(request, env, ctx).then(json).catch(error);
   },
-  async scheduled (event, env, context) {
-    context.config = config(env);
-    context.kv = new KV({ kv: env.RSSDOGE });
-    context.sentry = initSentry(event, env, context);
-    return await processEvent(event, env, context)
-  }
+  async scheduled(event: ScheduledController, env: Env, context: ExecutionContext) {
+    const ctx = context as Ctx;
+    ctx.config = config(env);
+    ctx.kv = new KV({ kv: env.RSSDOGE });
+    ctx.sentry = initSentry(event, env, ctx);
+    return await processEvent(event, env, ctx);
+  },
 };

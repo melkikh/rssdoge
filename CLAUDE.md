@@ -1,68 +1,109 @@
 # rssdoge
 
-Cloudflare Worker: по крону тащит RSS-фиды, суммаризирует посты через Workers AI, шлёт в Telegram.
+Cloudflare Worker: on a cron schedule fetches RSS feeds, summarizes posts via Workers AI, sends to Telegram.
 
-## Что не очевидно из кода
+## Documentation language
 
-### Два окружения в `src/config.js` синхронизировать вручную
+| Location | Language |
+|----------|----------|
+| `CLAUDE.md`, `README.md`, `.claude/skills/**` | **English** |
+| `plans/**` (local, gitignored) | **Russian** |
 
-`production` и `development` — отдельные блоки. Дублируются: `aiPrompt`, `classifierPrompt`, `classifierMaxBodyChars`, `aiModel`, `feedTimeoutMs`, `maxBodyTotal`, `tailSize`, `postsPerMessage`. При изменении любого из них править оба блока, иначе dev и prod разойдутся.
+Technical identifiers (`KV`, `bare header`, `captureException`) stay as-is in any language.
 
-### Workers AI: response shape зависит от модели
+## Local agent-loop artifacts (`plans/`)
 
-OpenAI-style модели (например, `@cf/zai-org/glm-4.7-flash`) возвращают `result.choices[0].message.content`. Llama-style — плоский `result.response`. Хелпер `extractContent()` в `src/ai.ts` намеренно склеивает оба варианта. При смене модели проверять, что именно она отдаёт, и при необходимости расширять цепочку, а не подменять.
+Session drafts — feature plans, backlog, "what's left" notes — **only in `plans/`**, not in the repo root. The directory is in `.gitignore`; do not commit it.
 
-### Двухступенчатый LLM-pipeline: classify → summarize
+**Where to put things**
 
-Для каждого поста с непустым `body` сначала `classifyPost()` (`max_completion_tokens: 10`, один токен `PASS`/`SKIP`), затем — только если не `SKIP` — `summarizePost()`. Модель одна и та же (GLM), промпты разные (`classifierPrompt` / `aiPrompt`). Так надёжнее, чем один вызов с гибридным промптом: маленькая фокусированная задача классификатора vs. большая многозадачная summary.
+| Type | Path | Example |
+|------|------|---------|
+| Implementation plan | `plans/<topic>-plan.md` | `plans/whitepapers-plan.md` |
+| Backlog / open session questions | `plans/issues.md` | ad-hoc, one file or by topic |
+| Done | `plans/done/` or delete | archive or simply delete |
 
-Классификатор возвращает `PASS` / `SKIP` / `UNKNOWN`. На `UNKNOWN` — fall-through в summary (не терять пост) + warning в Glitchtip. `SKIP` шлётся молча голой шапкой (это по замыслу; если хочется видимости false-positive skip'ов — добавить логирование под флагом).
+**Plan status** — YAML frontmatter at the top of the file:
 
-Safety net: если модель в саммари всё же выплюнет `__SKIP_BULLETS__` (промпт про него уже не говорит), `index.ts` его всё равно ловит и превращает в голую шапку.
+```yaml
+---
+status: active   # active | done | cancelled
+created: 2026-07-07
+---
+```
 
-### Пустые буллиты — фича, причин четыре
+`done` → move to `plans/done/` or delete. Stable conclusions from a plan go here (CLAUDE.md), into `.claude/skills/`, into code, or README — don't leave them only in `plans/`.
 
-Пост идёт в Telegram голой шапкой (`createPostMarkdown(post, "")`) в четырёх случаях:
-1. `!post.body` — фид не отдал тело;
-2. `classification === "SKIP"` — классификатор отсеял;
-3. `sanitizeBullets` отбросил вывод (CJK ≥2 символов или после нормализации пусто);
-4. `bullets.trim() === "__SKIP_BULLETS__"` (legacy safety net).
+**Agents:** do not create `*-plan.md`, `issues.md`, or drafts in the repo root; new local markdown only under `plans/`.
 
-Не добавлять `continue` / skip-логику: пост должен попасть в канал хотя бы заголовком со ссылкой.
+## Non-obvious behavior
 
-### Санитайзер вывода саммари (`src/ai.ts`)
+### `src/config.ts`: only four fields differ between prod and dev
 
-После `ai.run` результат прогоняется через `sanitizeBullets()`:
-- `hasTooManyCJK` — если в тексте ≥2 CJK-символа (китайский/японский/корейский), bullets отбрасываются целиком. Порог `>=2` — потому что модель галлюцинирует CJK парами (`全球`, `攻击`); одиночный иероглиф теоретически может быть легитимен (имя автора и т.п.).
-- `stripMarkdown` — режет backticks, `**bold**`, `*italic*`, `## headings`, code fences. Причина: `parse_mode: html` в Telegram, markdown отрисуется как литералы.
-- `normalizeBullets` — прибивает `- ` префикс каждой непустой строке, если модель забыла формат.
+`config(env)` spreads one `shared` object into both environments and overrides only `authentication`, `baseURL`, `telegramChatID`, and `feeds`. Prompts and feed maps are module-level consts (`AI_PROMPT`, `CLASSIFIER_PROMPT`, `FEEDS_PRODUCTION`, `FEEDS_DEVELOPMENT`). Add a shared setting once in `shared` — there is no prod/dev duplication left to sync by hand.
 
-При отбросе (CJK) `SummaryResult.rejectedReason = "cjk"` — этот тег уходит в Glitchtip warning, чтобы отслеживать частоту.
+### Workers AI: response shape depends on the model
 
-### KV курсор двигается только для успешных тегов
+OpenAI-style models (e.g. `@cf/zai-org/glm-4.7-flash`) return `result.choices[0].message.content`. Llama-style models return a flat `result.response`. The `extractContent()` helper in `src/ai.ts` intentionally handles both. When switching models, verify what the model actually returns and extend the chain if needed — don't replace it blindly.
 
-`ctx.kv.updateValues(...)` в `finally` (`src/index.ts`) получает не все `Object.keys(feeds)`, а только те, что **не попали в `failedTags`**. В `failedTags` добавляется тег при (а) фейле `fetchFeed`, (б) фейле `bot.sendMessage` на чанке, куда попал пост этого тега.
+### Two-step LLM pipeline: classify → summarize
 
-Trade-off: если один пост тега упал, а другой того же тега успешно ушёл — курсор не двинется, второй пост будет отправлен повторно на следующем крон-запуске (дубль). Это сознательный выбор: приоритет — не терять посты, лучше дубль. Если решишь поменять на per-post трекинг — потребуется отдельный KV-ключ на пост.
+For each post with a non-empty `body`, `tracePost()` (`src/pipeline.ts`) runs `classifyPostDetailed()` first (`max_completion_tokens: 10`, one token `PASS`/`SKIP`), then — only if not `SKIP` — `summarizePostDetailed()`. Both take an options object (`{ ai, model, prompt, ... }`). Same model (GLM), different prompts (`classifierPrompt` / `aiPrompt`). More reliable than one hybrid prompt: a small focused classifier task vs. a large multi-task summary.
 
-### Telegram 4096 символов — `chunkParts` в `src/utils.ts`
+The classifier returns `PASS` / `SKIP` / `UNKNOWN`. On `UNKNOWN` — fall through to summary (don't drop the post) + warning in Glitchtip. `SKIP` is sent silently as a bare header (by design; add logging behind a flag if you want visibility into false-positive skips).
 
-Лимит `sendMessage` = 4096 UTF-16 code units. `postsPerMessage: 5` сам по себе не спасает: 5 постов с жирными буллитами вылезают за лимит и TG возвращает 400. `chunkParts()` разбивает батч на подчанки ≤`TELEGRAM_MAX_MESSAGE`; если единичный пост длиннее — обрезает по последней `\n` с суффиксом `…`.
+Safety net: if the summary model still outputs `__SKIP_BULLETS__` (the prompt no longer mentions it), `index.ts` catches it and turns it into a bare header.
 
-При провале сенда падает **чанк**, а не весь батч: только теги постов этого чанка попадают в `failedTags`, остальные посты того же батча уже могут быть отправлены другими чанками.
+### Empty bullets are a feature — five causes
+
+A post goes to Telegram as a bare header (`createPostMarkdown(post, "")`) in five cases:
+1. `!post.body` — feed didn't return a body;
+2. `post.body.length < minBodyChars` — body too short (e.g. reddit `[removed]` with template `[link] [comments]` ≈ 17 chars). Filtered **before** LLM calls so the model doesn't hallucinate content from the title alone;
+3. `classification === "SKIP"` — classifier filtered it out;
+4. `sanitizeBullets` rejected the output (CJK ≥2 chars or empty after normalization);
+5. `bullets.trim() === "__SKIP_BULLETS__"` (legacy safety net).
+
+Each case is logged via `logBareHeader()`: always `console.log('[bare-header] <reason>...')` (visible in `wrangler tail`), plus — for all except `classified_skip` — `captureException` with tag `reason` (groups in Glitchtip under a single issue "Post ended as bare header"). `classified_skip` is intentionally silent — too much filtered marketing would clutter the dashboard.
+
+Do not add `continue` / skip logic: every post must reach the channel at least as a title with a link.
+
+### Summary output sanitizer (`src/ai.ts`)
+
+After `ai.run`, the result goes through `sanitizeBullets()`:
+- `hasTooManyCJK` — if the text has ≥2 CJK characters (Chinese/Japanese/Korean), bullets are dropped entirely. Threshold `>=2` because the model hallucinates CJK in pairs (`全球`, `攻击`); a single character might be legitimate (author name, etc.).
+- `stripMarkdown` — removes backticks, `**bold**`, `*italic*`, `## headings`, code fences. Reason: `parse_mode: html` in Telegram; markdown renders as literals.
+- `normalizeBullets` — adds `- ` prefix to each non-empty line if the model forgot the format.
+
+On rejection (CJK), `SummaryResult.rejectedReason = "cjk"` — this tag goes to Glitchtip as a warning to track frequency.
+
+### KV cursor advances only for successful tags
+
+`ctx.kv.updateValues(...)` in `finally` (`src/index.ts`) receives not all `Object.keys(feeds)`, but only those **not in `failedTags`**. A tag is added to `failedTags` on (a) `fetchFeed` failure, (b) `bot.sendMessage` failure on a chunk that included a post from that tag.
+
+Trade-off: if one post from a tag fails but another from the same tag succeeds — the cursor won't move and the second post will be resent on the next cron run (duplicate). Deliberate choice: priority is not losing posts; a duplicate is acceptable. Per-post tracking would require a separate KV key per post.
+
+### Telegram 4096 chars — `chunkParts` in `src/utils.ts`
+
+`sendMessage` limit = 4096 UTF-16 code units. `postsPerMessage: 5` alone doesn't help: 5 posts with bold bullets exceed the limit and TG returns 400. `chunkParts()` splits a batch into sub-chunks ≤`TELEGRAM_MAX_MESSAGE`; if a single post is longer — truncates at the last `\n` with `…` suffix.
+
+On send failure, the **chunk** fails, not the whole batch: only tags of posts in that chunk go into `failedTags`; other posts from the same batch may already have been sent by other chunks.
 
 ### Workers AI free tier — 10k neurons/day
 
-Бюджет общий между моделями. По грубой оценке при текущем крон-расписании (`0,30 9-18 mon-fri`, 20 запусков × ~3 поста × ~40 neurons) — ~2400 n/day, запас 4×. При смене модели или увеличении `updateCount`/`postsPerMessage` пересчитывать. Классификатор дёшев (`max_completion_tokens: 10`), его вклад пренебрежимо мал.
+Shared budget across models. Rough estimate at current cron schedule (`0,30 9-18 mon-fri`, 20 runs × ~3 posts × ~40 neurons) — ~2400 n/day, 4× headroom. Recalculate when changing models or increasing `updateCount`/`postsPerMessage`. The classifier is cheap (`max_completion_tokens: 10`), its contribution is negligible. Heavy models may not fit the daily limit at the current cron schedule.
 
-### Workers AI free tier — 10k neurons/day
+### Reasoning models consume `max_completion_tokens` on thinking
 
-Бюджет общий между моделями. Учитывать при свапе модели: тяжёлые модели могут не пролезть в дневной лимит при текущем расписании крона.
+GLM-4.7-flash and similar reasoning models default to `enable_thinking=true`. Budget goes to internal CoT, `choices[0].message.content` comes back empty — post is sent as a bare header with no errors in logs. Thinking isn't needed for bullet summaries: keep `chat_template_kwargs: { enable_thinking: false }` in `src/ai.ts`. When switching models — check the input schema for reasoning flags.
 
-### Reasoning-модели съедают `max_completion_tokens` на thinking
+### Errors go to Glitchtip, not Sentry
 
-У GLM-4.7-flash и подобных reasoning-моделей `enable_thinking=true` по умолчанию. Бюджет уходит во внутренний CoT, `choices[0].message.content` приходит пустым — пост шлётся «голой шапкой», ошибок в логах нет. Для буллит-саммари thinking не нужен: держать `chat_template_kwargs: { enable_thinking: false }` в `src/ai.ts`. При смене модели — проверять схему ввода на наличие reasoning-флагов.
+`initSentry`, `ctx.sentry`, `env.SENTRY_DSN`, `toucan-js` — historical names; the DSN actually points to Glitchtip (Sentry-compatible). Error dashboard is Glitchtip, not sentry.io. When working with the SDK, remember Glitchtip covers only a subset of the Sentry API (performance, profiling, etc. may not work).
 
-### Ошибки шлются в Glitchtip, не Sentry
+### Warning-level events don't reach Glitchtip
 
-`initSentry`, `ctx.sentry`, `env.SENTRY_DSN`, `toucan-js` — исторические имена, фактически DSN указывает на Glitchtip (он Sentry-совместимый). Дашборд ошибок — Glitchtip, не sentry.io. При работе с SDK помнить, что Glitchtip покрывает лишь подмножество Sentry API (часть фич — performance, profiling — может не работать).
+`scope.setLevel("warning")` + `scope.captureMessage(...)` in toucan-js/Glitchtip is **silently dropped** — 0 warning events in the dashboard over 90 days, only errors. Either toucan doesn't propagate level from scope to event, or Glitchtip filters them. Workaround: for "non-fatal but important" signals use `scope.captureException(new Error("Post ended as bare header: ..."))` — they arrive reliably, at the cost of appearing as errors in the dashboard. For grouping by cause use tag `reason` — Glitchtip filter `tag:reason:summary_cjk` works.
+
+### Debug endpoint — pipeline dry-run
+
+`POST /debug/tag/:tag` (auth = same Bearer / `TELEGRAM_TOKEN` in prod; auth disabled in dev). Runs fetch → classify → summarize, returns JSON with `pipeline.step`, `feed_raw`, `classifier`, `summary`, `would_send`. **Does not send to Telegram, does not advance KV.** Query: `?since=<ISO>` (cursor override), `?limit=N` (default 3, max 20). Post logic — `tracePost()` in `src/pipeline.ts` (same path as cron). Skill client: `dotenvx run -- node .claude/skills/debug/debug.mjs tag <tag>` — needs `TELEGRAM_TOKEN` in `.env` (same value as the worker secret; CLI doesn't read Cloudflare secrets).
