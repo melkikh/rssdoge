@@ -66,11 +66,19 @@ async function indexHandler(request: IRequest, env: Env, ctx: Ctx) {
   return json({ tags });
 }
 
-async function getContent(ctx: Ctx, feeds: Record<string, string>, ages: Record<string, string>) {
+async function getContent(
+  ctx: Ctx,
+  feeds: Record<string, string>,
+  ages: Record<string, string>,
+  seen: Record<string, string[]>,
+) {
   const failedTags = new Set<string>();
+  // Full link set per whitepaper feed (pre-filter), used to prune KV `seen` to the feed.
+  const feedLinksByTag: Record<string, string[]> = {};
   const results = await Promise.all(
     Object.keys(feeds).map(async (tag) => {
-      const sinceDate = ages[tag] ? new Date(ages[tag]) : new Date(0);
+      const isWhitepaper = isWhitepaperTag(ctx.config, tag);
+      const sinceDate = !isWhitepaper && ages[tag] ? new Date(ages[tag]) : new Date(0);
       try {
         const url = feeds[tag];
         const start = performance.now();
@@ -82,7 +90,11 @@ async function getContent(ctx: Ctx, feeds: Record<string, string>, ages: Record<
         });
         const end = performance.now();
         console.log(`Fetching '${tag}' feed took ${end - start}ms`);
-        return limitWhitepaperPosts(items, tag, ctx.config);
+        if (!isWhitepaper) return items;
+        feedLinksByTag[tag] = items.map((p) => p.link);
+        const seenSet = new Set(seen[tag] ?? []);
+        const fresh = items.filter((p) => !seenSet.has(p.link));
+        return limitWhitepaperPosts(fresh, tag, ctx.config);
       } catch (err) {
         ctx.sentry.captureException(new Error(`Failed to fetch '${tag}' feed`, { cause: err }));
         failedTags.add(tag);
@@ -93,7 +105,7 @@ async function getContent(ctx: Ctx, feeds: Record<string, string>, ages: Record<
 
   const content = results.flat();
   content.sort(sortDate);
-  return { content, failedTags };
+  return { content, failedTags, feedLinksByTag };
 }
 
 const ALERT_REASONS = new Set(["no_body", "body_too_short", "classified_unknown", "summary_empty", "summary_cjk"]);
@@ -219,9 +231,14 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
     chatID: ctx.config.telegramChatID,
   });
   const ages = await ctx.kv.getAll();
-  const feeds = randomMapElements(allFeeds(ctx.config), ctx.config.updateCount);
-  const { content, failedTags } = await getContent(ctx, feeds, ages);
-  const whitepaperMaxDates: Record<string, Date> = {};
+  const seen = await ctx.kv.getSeen();
+  // News sampled randomly; whitepaper feeds run every time (see CLAUDE.md).
+  const feeds = {
+    ...randomMapElements(ctx.config.feeds, ctx.config.updateCount),
+    ...whitepaperFeedsAsUrls(ctx.config.whitepaperFeeds),
+  };
+  const { content, failedTags, feedLinksByTag } = await getContent(ctx, feeds, ages, seen);
+  const sentLinksByTag: Record<string, string[]> = {};
   const enrichBudget = { remaining: ctx.config.pdfMaxItemsPerRun, spent: 0 };
 
   try {
@@ -236,8 +253,7 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
         const category = postCategory(ctx.config, post.tag);
         parts.push({ post, text: createPostMarkdown(post, trace.bullets, category) });
         if (isWhitepaperTag(ctx.config, post.tag)) {
-          const prev = whitepaperMaxDates[post.tag];
-          if (!prev || post.date > prev) whitepaperMaxDates[post.tag] = post.date;
+          (sentLinksByTag[post.tag] ??= []).push(post.link);
         }
       }
 
@@ -256,8 +272,18 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
   } finally {
     const successfulTags = Object.keys(feeds).filter(tag => !failedTags.has(tag));
     if (successfulTags.length > 0) {
-      const updates = buildCursorUpdates(successfulTags, ctx.config, now, whitepaperMaxDates);
-      await ctx.kv.updateValues(updates);
+      const updates = buildCursorUpdates(successfulTags, ctx.config, now);
+      if (Object.keys(updates).length > 0) await ctx.kv.updateValues(updates);
+    }
+    const sentForSuccess: Record<string, string[]> = {};
+    const feedLinksForSuccess: Record<string, string[]> = {};
+    for (const tag of Object.keys(feedLinksByTag)) {
+      if (failedTags.has(tag)) continue;
+      feedLinksForSuccess[tag] = feedLinksByTag[tag];
+      if (sentLinksByTag[tag]) sentForSuccess[tag] = sentLinksByTag[tag];
+    }
+    if (Object.keys(feedLinksForSuccess).length > 0) {
+      await ctx.kv.updateSeen(sentForSuccess, feedLinksForSuccess);
     }
   }
 }

@@ -10,12 +10,12 @@ const testConfig = {
   aiPrompt: "summarizer",
   maxBodyTotal: 10000,
   tailSize: 1500,
-  whitepaperFeeds: { arxiv_cscr: { url: "https://rss.arxiv.org/rss/cs.CR", readPdf: true } },
+  whitepaperFeeds: { arxiv_cscr: "https://rss.arxiv.org/rss/cs.CR" },
   whitepaperClassifierPrompt: "wp-classifier",
   whitepaperPrompt: "wp-summarizer",
+  whitepaperMaxBodyTotal: 4000,
   feedTimeoutMs: 10000,
   neuronGateThreshold: 8000,
-  whitepaperCjkThreshold: 8,
 };
 
 function makePost(overrides: Partial<Post> = {}): Post {
@@ -136,21 +136,15 @@ describe("isWhitepaperTag", () => {
 
 describe("buildCursorUpdates", () => {
   const now = new Date("2026-07-07T12:00:00Z");
-  const processedDate = new Date("2026-07-06T08:00:00Z");
 
-  it("uses max processed post date for whitepaper tags", () => {
-    const updates = buildCursorUpdates(
-      ["arxiv_cscr", "netsec"],
-      testConfig,
-      now,
-      { arxiv_cscr: processedDate },
-    );
-    expect(updates.arxiv_cscr).toEqual(processedDate);
+  it("sets now for news tags", () => {
+    const updates = buildCursorUpdates(["netsec"], testConfig, now);
     expect(updates.netsec).toEqual(now);
   });
 
-  it("falls back to now for whitepaper tags with no processed posts", () => {
-    const updates = buildCursorUpdates(["arxiv_cscr"], testConfig, now, {});
-    expect(updates.arxiv_cscr).toEqual(now);
+  it("excludes whitepaper tags (they dedup by link, not date)", () => {
+    const updates = buildCursorUpdates(["arxiv_cscr", "netsec"], testConfig, now);
+    expect(updates).not.toHaveProperty("arxiv_cscr");
+    expect(updates.netsec).toEqual(now);
   });
 });

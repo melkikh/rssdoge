@@ -22,9 +22,9 @@ export type PipelineConfig = Pick<
   | "whitepaperFeeds"
   | "whitepaperClassifierPrompt"
   | "whitepaperPrompt"
+  | "whitepaperMaxBodyTotal"
   | "feedTimeoutMs"
   | "neuronGateThreshold"
-  | "whitepaperCjkThreshold"
 >;
 
 export type PipelineStep =
@@ -83,20 +83,16 @@ export function resolvePrompts(
   };
 }
 
-/** Per-tag KV cursor: whitepaper tags use max processed post date; news feeds use `now`. */
+/** News-only date cursor (→ `now`); whitepaper tags dedup by link instead. See CLAUDE.md. */
 export function buildCursorUpdates(
   successfulTags: string[],
   config: Pick<AppConfig, "whitepaperFeeds">,
   now: Date,
-  whitepaperMaxDates: Record<string, Date>,
 ): Record<string, Date> {
   const updates: Record<string, Date> = {};
   for (const tag of successfulTags) {
-    if (isWhitepaperTag(config, tag) && whitepaperMaxDates[tag]) {
-      updates[tag] = whitepaperMaxDates[tag];
-    } else {
-      updates[tag] = now;
-    }
+    if (isWhitepaperTag(config, tag)) continue;
+    updates[tag] = now;
   }
   return updates;
 }
@@ -302,9 +298,8 @@ export async function tracePost(
       ai: env.AI,
       model: config.aiModel,
       prompt: summaryPrompt,
-      maxBodyTotal: config.maxBodyTotal,
+      maxBodyTotal: isWhitepaper ? config.whitepaperMaxBodyTotal : config.maxBodyTotal,
       tailSize: config.tailSize,
-      cjkThreshold: isWhitepaper ? config.whitepaperCjkThreshold : undefined,
     });
     summary = {
       raw_output: res.rawOutput,

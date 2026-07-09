@@ -11,6 +11,10 @@ Cloudflare Worker: on a cron schedule fetches RSS feeds, summarizes posts via Wo
 
 Technical identifiers (`KV`, `bare header`, `captureException`) stay as-is in any language.
 
+## Code comments
+
+Keep comments minimal: only what a human can't easily infer from the code itself (a non-obvious invariant, a gotcha, why-not-the-obvious-thing). Do **not** narrate what the code does or restate design rationale in the source. Rationale, trade-offs, and "why" belong in this file (`CLAUDE.md`) — reference it from a one-line comment (`// … see CLAUDE.md`) instead of duplicating it inline.
+
 ## Local agent-loop artifacts (`plans/`)
 
 Session drafts — feature plans, backlog, "what's left" notes — **only in `plans/`**, not in the repo root. The directory is in `.gitignore`; do not commit it.
@@ -76,11 +80,15 @@ After `ai.run`, the result goes through `sanitizeBullets()`:
 
 On rejection (CJK), `SummaryResult.rejectedReason = "cjk"` — this tag goes to Glitchtip as a warning to track frequency.
 
-### KV cursor advances only for successful tags
+### KV cursor (news) vs link-dedup (whitepaper)
 
-`ctx.kv.updateValues(...)` in `finally` (`src/index.ts`) receives a **per-tag** `Record<string, Date>`, not a single timestamp. Built by `buildCursorUpdates()`: for **news feeds** the cursor is `now`; for **whitepaper tags** it is the **max `date` of posts actually processed** in that run (oldest-first drain under `whitepaperMaxItemsPerRun`). Only tags **not in `failedTags`** are updated. A tag is added to `failedTags` on (a) `fetchFeed` failure, (b) `bot.sendMessage` failure on a chunk that included a post from that tag.
+Two different dedup mechanisms by feed type:
 
-Trade-off: if one post from a tag fails but another from the same tag succeeds — the cursor won't move and the second post will be resent on the next cron run (duplicate). Deliberate choice: priority is not losing posts; a duplicate is acceptable. Per-post tracking would require a separate KV key per post.
+**News feeds — date cursor.** `ctx.kv.updateValues(...)` in `finally` (`src/index.ts`) receives a **per-tag** `Record<string, Date>`. `buildCursorUpdates()` sets the cursor to `now` for **news tags only** (whitepaper tags are excluded). Only tags **not in `failedTags`** are updated. A tag is added to `failedTags` on (a) `fetchFeed` failure, (b) `bot.sendMessage` failure on a chunk that included a post from that tag.
+
+**Whitepaper feeds — link-dedup (KV `seen`), NOT a date cursor.** arXiv gives every entry the same daily `pubDate` (verified) and re-announces old papers (v2/v3, cross-list) with today's date, so a date cursor can neither dedup re-announcements nor keep the same-date backlog. Instead `KV.updateSeen(sent, feedLinks)` stores, per whitepaper tag, the set of already-sent **links**, pruned to **what is currently in the feed**: `seen[tag] = uniq((seen ∪ sent) ∩ feedLinks)`. Retention needs no TTL/cap magic number — a link that dropped out of the feed can't be re-fetched, so it's forgotten; the set self-bounds to feed size. `getContent` filters posts with `link ∈ seen[tag]` before the `whitepaperMaxItemsPerRun` cap. Whitepaper tags therefore always fetch with `since = epoch` (no `ages[tag]` entry). Failure-mode: a link that left the feed and later reappears (weeks-later update) is re-sent once — treated as a legitimately-resurfaced new version.
+
+Trade-off (both mechanisms): if one post from a tag fails but another from the same tag succeeds — the cursor / `seen` won't advance for that tag and the succeeded post is resent next run (duplicate). Deliberate: priority is not losing posts; a duplicate is acceptable.
 
 ### Telegram 4096 chars — `chunkParts` in `src/utils.ts`
 
@@ -90,7 +98,7 @@ On send failure, the **chunk** fails, not the whole batch: only tags of posts in
 
 ### Workers AI free tier — 10k neurons/day
 
-Shared budget across models. Rough estimate at current cron schedule (`0,30 9-18 mon-fri`, 20 runs): blog path ~2400 n/day (4× headroom); with whitepaper feeds in the random pool add ~200 classify + ~100 summarize/day (10 items × 2 whitepaper feeds, not every run). Still well under 10k — see **Quotas and limits** below. Recalculate when changing models, `updateCount`, `whitepaperMaxItemsPerRun`, or cron. The classifier is cheap (`max_completion_tokens: 10`), its contribution is negligible. Heavy models may not fit the daily limit at the current cron schedule.
+Shared budget across models. Rough estimate at current cron schedule (`0,30 9-18 mon-fri`, ~20 runs): blog path ~2400 n/day (4× headroom); whitepaper feeds now run **every** invocation (3 feeds, `whitepaperMaxItemsPerRun` 10/tag) — classify is negligible (`max_completion_tokens: 10`), summarize is the cost (~40 n each) but bounded by the daily new-post count (arXiv ~59/day, most SKIP → maybe ~20–40 summarize/day). Still well under 10k — see **Quotas and limits** below. Recalculate when changing models, `updateCount`, `whitepaperMaxItemsPerRun`, or cron. Heavy models may not fit the daily limit at the current cron schedule.
 
 ### Reasoning models consume `max_completion_tokens` on thinking
 
@@ -109,16 +117,17 @@ GLM-4.7-flash and similar reasoning models default to `enable_thinking=true`. Bu
 Body comes straight from RSS where available; fuller text via `env.AI.toMarkdown()` when configured.
 
 Feeds in `WHITEPAPER_FEEDS` (`src/config.ts`):
-- **arXiv cs.CR** — abstract in RSS; after PASS fetches PDF (`readPdf: true`)
-- **Elastic Security Labs** — full text in `content:encoded` (RSS only)
-- **Google Research blog** — no body in RSS; fetches page before classify (`enrichBody: true`)
+- **arXiv cs.CR** — **abstract-only** (string entry, no `readPdf`). The abstract is clean author-written know-how; the full PDF via `toMarkdown` is noisy and made the model return empty summaries (`finish_reason=missing`). `arxivPdfUrl()`/`readPdf` still exist but are unused by default — re-enable only with a fallback for empty output.
+- **Google Research blog** — no body in RSS (only a category ~15 chars); fetches page before classify (`enrichBody: true`). URL uses trailing slash `…/blog/rss/` (avoids a redirect).
 - **PortSwigger Research** — RSS teaser ~250 chars; fetches full page after PASS (`enrichAfterPass: true`)
 
-**Rejected earlier:** IACR ePrint (pure theory + fetch issues).
+**Moved out:** **Elastic Security Labs** → regular `feeds` (`FEEDS_PRODUCTION`), not a whitepaper source — it's a marketing/GA-heavy vendor blog. Goes through the strict news `CLASSIFIER_PROMPT` + shorter `AI_PROMPT`, no `#whitepaper` tag. **Rejected earlier:** IACR ePrint (pure theory + fetch issues).
 
 Flow: `fetchFeed()` → `tracePost()`. Enrichment (`src/enrich.ts`): our `fetch(link)` → blob → `env.AI.toMarkdown()` — converter only, not a crawler. Runs before classify (missing body) or after PASS (PDF/full page). Budget: `pdfMaxItemsPerRun` (default 5/run) + KV neuron gate (`neuronGateThreshold` 8000, key `neurons:<UTC-date>`).
 
-Whitepaper posts share the same `Post` type. Domain filter: `whitepaperClassifierPrompt`. Input cap: `whitepaperMaxItemsPerRun` (10), **oldest-first**. CJK sanitizer threshold relaxed for whitepapers (`whitepaperCjkThreshold: 8` vs 2).
+Whitepaper posts share the same `Post` type. Domain filter: `whitepaperClassifierPrompt` (strict on product/GA/tech-preview/marketing). Summary via `whitepaperPrompt` (know-how focus, 2–6 bullets). Input cap: `whitepaperMaxItemsPerRun` (10), **oldest-first**; body cap `whitepaperMaxBodyTotal` (4000, vs 10000 news) to curb long full-page summaries. CJK sanitizer uses the **default threshold 2** everywhere — the old per-whitepaper relaxed threshold was wrong (the sanitizer runs on the Russian *output*, not the source abstract, so CJK is always a hallucination).
+
+Whitepaper feeds run **every cron invocation** (`processEvent`: `randomMapElements(config.feeds, ...)` is spread with the full `whitepaperFeedsAsUrls(config.whitepaperFeeds)`) — they're few, and the 50-subrequest cap forbids classifying a full day's arXiv in one run, so the daily backlog is drained across the ~20 runs/day within the feed's window.
 
 ### Prompt routing by tag
 

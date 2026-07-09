@@ -31,10 +31,10 @@ export interface AppConfig {
   whitepaperClassifierPrompt: string;
   whitepaperPrompt: string;
   whitepaperMaxItemsPerRun: number;
+  whitepaperMaxBodyTotal: number;
   pdfMaxItemsPerRun: number;
   neuronDailyLimit: number;
   neuronGateThreshold: number;
-  whitepaperCjkThreshold: number;
 }
 
 // Prompt text is identical for prod & dev — kept once here.
@@ -90,10 +90,14 @@ PASS если статья несёт прикладное техсодержа�
 - инструменты, тулинг, PoC, методики тестирования и red team;
 - прикладные домены: антифрод, аутентификация и identity, AI/agent security, сетевая безопасность, threat intel.
 
-SKIP если:
+SKIP жёстко, если это по сути НЕ research-статья, а:
+- анонс продукта или фичи, релиз, GA, "tech preview", "now available", changelog, roadmap;
+- маркетинг, PR, self-congratulatory текст, кейс "как нам помог наш продукт";
+- анонс конференции, награды, партнёрства, вакансии;
 - чистая теория, формальные доказательства, узкая криптографическая математика без практического применения;
-- маркетинг, анонс конференции/награды, PR без техсодержания;
 - пустой, бессмысленный или отсутствующий абстракт.
+
+Если сомневаешься между "прикладной research" и "продуктовый/маркетинговый пост" — выбирай SKIP.
 
 Один пост — один ответ: PASS или SKIP.`;
 
@@ -107,16 +111,18 @@ const WHITEPAPER_PROMPT = `Пишешь для безопасников и ин�
 
 Тон: как коллеге за кофе, по делу. Без канцелярита и пафоса. Без вводных «в статье говорится», «автор рассказывает» — сразу к сути.
 
-Фокус summary для research:
-- в чём новый подход или результат (чем отличается от известного);
-- чем это практически полезно инженеру или blue team;
-- где применимо (продукты, домены, сценарии атак/защиты).
+Задача — вытащить know how, а не пересказать абстракт. Каждый буллит = одна конкретная полезная вещь:
+- в чём именно новый приём / трюк / метод (не "предложен подход", а КАКОЙ и как работает);
+- ключевой результат числом или фактом, если он есть;
+- чем это практически полезно инженеру или blue/red team и где применимо.
 
-Длина — по объёму содержания. Если по сути 2 буллита — выдай 2. Максимум 9. Лучше плотно и коротко.
+Не пересказывай структуру статьи, мотивацию и общие места ("проблема важна", "мы исследовали"). Если из текста нельзя вытащить конкретику — лучше меньше буллитов.
+
+Длина: 2–6 буллитов, обычно 3–4. Лучше 3 плотных, чем 6 размытых. Не растягивай.
 
 Запрещено:
-- дублировать информацию между буллитами;
-- капитанские выводы и общие фразы;
+- дублировать информацию между буллитами и повторять мысль другими словами;
+- капитанские выводы, общие фразы, мотивацию/введение;
 - метакомментарии о тексте;
 - переводить устоявшиеся англоязычные термины;
 - финальные «итого» / «вывод»;
@@ -125,14 +131,14 @@ const WHITEPAPER_PROMPT = `Пишешь для безопасников и ин�
 Формат: только пункты, каждый с новой строки, с "- "; без вступления и без финального обобщения.`;
 
 const WHITEPAPER_FEEDS: Record<string, WhitepaperFeedEntry> = {
-  arxiv_cscr: { url: "https://rss.arxiv.org/rss/cs.CR", readPdf: true },
-  elastic_security_labs: "https://www.elastic.co/security-labs/rss/feed.xml",
-  google_research: { url: "https://research.google/blog/rss", enrichBody: true },
+  arxiv_cscr: "https://rss.arxiv.org/rss/cs.CR", // abstract-only, no readPdf — see CLAUDE.md
+  google_research: { url: "https://research.google/blog/rss/", enrichBody: true },
   portswigger_research: { url: "https://portswigger.net/research/rss", enrichAfterPass: true },
 };
 
 const FEEDS_PRODUCTION: Record<string, string> = {
   netsec: "https://reddit.com/r/netsec.rss",
+  elastic_security_labs: "https://www.elastic.co/security-labs/rss/feed.xml",
   opennet: "https://www.opennet.ru/opennews/opennews_sec.rss",
   meta_engineering: "https://engineering.fb.com/feed/",
   google_online_security:
@@ -188,10 +194,10 @@ export default function config(env: Env): AppConfig {
     whitepaperClassifierPrompt: WHITEPAPER_CLASSIFIER_PROMPT,
     whitepaperPrompt: WHITEPAPER_PROMPT,
     whitepaperMaxItemsPerRun: 10,
+    whitepaperMaxBodyTotal: 4000,
     pdfMaxItemsPerRun: 5,
     neuronDailyLimit: 10000,
     neuronGateThreshold: 8000,
-    whitepaperCjkThreshold: 8,
   };
 
   const environments: Record<string, AppConfig> = {
