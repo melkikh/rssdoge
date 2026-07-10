@@ -1,4 +1,4 @@
-import type { WhitepaperFeedEntry } from "./enrich";
+import type { FeedEntry } from "./enrich";
 
 export interface Env {
   RSSDOGE: KVNamespace;
@@ -26,12 +26,9 @@ export interface AppConfig {
   tailSize: number;
   feedTimeoutMs: number;
   postsPerMessage: number;
-  feeds: Record<string, string>;
-  whitepaperFeeds: Record<string, WhitepaperFeedEntry>;
+  feeds: Record<string, FeedEntry>;
   whitepaperClassifierPrompt: string;
   whitepaperPrompt: string;
-  whitepaperMaxItemsPerRun: number;
-  whitepaperMaxBodyTotal: number;
   pdfMaxItemsPerRun: number;
   neuronDailyLimit: number;
   neuronGateThreshold: number;
@@ -130,13 +127,21 @@ const WHITEPAPER_PROMPT = `Пишешь для безопасников и ин�
 
 Формат: только пункты, каждый с новой строки, с "- "; без вступления и без финального обобщения.`;
 
-const WHITEPAPER_FEEDS: Record<string, WhitepaperFeedEntry> = {
-  arxiv_cscr: "https://rss.arxiv.org/rss/cs.CR", // abstract-only, no readPdf — see CLAUDE.md
+const FEEDS_PRODUCTION: Record<string, FeedEntry> = {
+  // The one true whitepaper: link-dedup (same daily pubDate), research prompts, #whitepaper tag,
+  // always-run + oldest-first drain of the backlog. See CLAUDE.md.
+  arxiv_cscr: {
+    url: "https://rss.arxiv.org/rss/cs.CR", // abstract-only, no readPdf — see CLAUDE.md
+    dedup: "link",
+    prompts: "whitepaper",
+    category: "whitepaper",
+    alwaysRun: true,
+    maxItems: 10,
+    maxBodyTotal: 4000,
+  },
+  // Research blogs that need body enrichment (RSS has no/short body) but are ordinary news feeds otherwise.
   google_research: { url: "https://research.google/blog/rss/", enrichBody: true },
   portswigger_research: { url: "https://portswigger.net/research/rss", enrichAfterPass: true },
-};
-
-const FEEDS_PRODUCTION: Record<string, string> = {
   netsec: "https://reddit.com/r/netsec.rss",
   elastic_security_labs: "https://www.elastic.co/security-labs/rss/feed.xml",
   opennet: "https://www.opennet.ru/opennews/opennews_sec.rss",
@@ -158,7 +163,6 @@ const FEEDS_PRODUCTION: Record<string, string> = {
   teleport: "https://goteleport.com/blog/rss.xml",
   cloudflare_security: "https://blog.cloudflare.com/tag/security/rss",
   cloudflare_research: "https://blog.cloudflare.com/tag/research/rss",
-  ksoc: "https://ksoc.com/blog/rss.xml",
   okta_security: "https://sec.okta.com/rss.xml",
   unskilled: "https://unskilled.blog/index.xml",
   rami_mac: "https://ramimac.me/feed.xml",
@@ -166,7 +170,6 @@ const FEEDS_PRODUCTION: Record<string, string> = {
   bruce_schneier: "https://www.schneier.com/feed/atom",
   badprivacy: "https://medium.com/feed/@badprivacy",
   oblique_security: "https://oblique.security/blog/feed.xml",
-  theengineersetlist: "https://theengineersetlist.substack.com/feed",
   philvenables: "https://www.philvenables.com/blog-feed.xml",
   pilotprotocol: "https://pilotprotocol.network/blog/feed.xml",
 };
@@ -190,11 +193,8 @@ export default function config(env: Env): AppConfig {
     tailSize: 1500,
     feedTimeoutMs: 10000,
     postsPerMessage: 5,
-    whitepaperFeeds: WHITEPAPER_FEEDS,
     whitepaperClassifierPrompt: WHITEPAPER_CLASSIFIER_PROMPT,
     whitepaperPrompt: WHITEPAPER_PROMPT,
-    whitepaperMaxItemsPerRun: 10,
-    whitepaperMaxBodyTotal: 4000,
     pdfMaxItemsPerRun: 5,
     neuronDailyLimit: 10000,
     neuronGateThreshold: 8000,

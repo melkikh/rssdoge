@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Post } from "../src/feed";
-import { tracePost, resolvePrompts, isWhitepaperTag, buildCursorUpdates } from "../src/pipeline";
+import { tracePost, resolvePrompts, feedFor, buildCursorUpdates } from "../src/pipeline";
 
 const testConfig = {
   minBodyChars: 100,
@@ -10,10 +10,18 @@ const testConfig = {
   aiPrompt: "summarizer",
   maxBodyTotal: 10000,
   tailSize: 1500,
-  whitepaperFeeds: { arxiv_cscr: "https://rss.arxiv.org/rss/cs.CR" },
+  feeds: {
+    netsec: "https://reddit.com/r/netsec.rss",
+    arxiv_cscr: {
+      url: "https://rss.arxiv.org/rss/cs.CR",
+      dedup: "link" as const,
+      prompts: "whitepaper" as const,
+      category: "whitepaper" as const,
+      maxBodyTotal: 4000,
+    },
+  },
   whitepaperClassifierPrompt: "wp-classifier",
   whitepaperPrompt: "wp-summarizer",
-  whitepaperMaxBodyTotal: 4000,
   feedTimeoutMs: 10000,
   neuronGateThreshold: 8000,
 };
@@ -127,10 +135,11 @@ describe("resolvePrompts", () => {
   });
 });
 
-describe("isWhitepaperTag", () => {
-  it("recognizes whitepaper feed tags", () => {
-    expect(isWhitepaperTag(testConfig, "arxiv_cscr")).toBe(true);
-    expect(isWhitepaperTag(testConfig, "netsec")).toBe(false);
+describe("feedFor", () => {
+  it("resolves per-feed flags by tag", () => {
+    expect(feedFor(testConfig, "arxiv_cscr")?.dedup).toBe("link");
+    expect(feedFor(testConfig, "netsec")?.dedup).toBe("date");
+    expect(feedFor(testConfig, "unknown")).toBeNull();
   });
 });
 

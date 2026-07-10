@@ -5,8 +5,9 @@ import type { AppConfig } from "./config";
 import type { KV } from "./kv";
 import {
   type EnrichBudget,
+  type ResolvedFeed,
   enrichPostBody,
-  getWhitepaperFeedConfig,
+  getFeedConfig,
 } from "./enrich";
 
 /** The config fields tracePost actually reads — keeps the test config small and honest. */
@@ -19,10 +20,9 @@ export type PipelineConfig = Pick<
   | "aiPrompt"
   | "maxBodyTotal"
   | "tailSize"
-  | "whitepaperFeeds"
+  | "feeds"
   | "whitepaperClassifierPrompt"
   | "whitepaperPrompt"
-  | "whitepaperMaxBodyTotal"
   | "feedTimeoutMs"
   | "neuronGateThreshold"
 >;
@@ -63,15 +63,15 @@ export type PostTrace = {
 const PREVIEW_HEAD = 120;
 const PREVIEW_TAIL = 80;
 
-export function isWhitepaperTag(config: Pick<AppConfig, "whitepaperFeeds">, tag: string): boolean {
-  return tag in config.whitepaperFeeds;
+export function feedFor(config: Pick<AppConfig, "feeds">, tag: string): ResolvedFeed | null {
+  return getFeedConfig(config.feeds, tag);
 }
 
 export function resolvePrompts(
-  config: Pick<AppConfig, "classifierPrompt" | "aiPrompt" | "whitepaperFeeds" | "whitepaperClassifierPrompt" | "whitepaperPrompt">,
+  config: Pick<AppConfig, "classifierPrompt" | "aiPrompt" | "feeds" | "whitepaperClassifierPrompt" | "whitepaperPrompt">,
   tag: string,
 ): { classifierPrompt: string; summaryPrompt: string } {
-  if (isWhitepaperTag(config, tag)) {
+  if (feedFor(config, tag)?.prompts === "whitepaper") {
     return {
       classifierPrompt: config.whitepaperClassifierPrompt,
       summaryPrompt: config.whitepaperPrompt,
@@ -83,15 +83,15 @@ export function resolvePrompts(
   };
 }
 
-/** News-only date cursor (→ `now`); whitepaper tags dedup by link instead. See CLAUDE.md. */
+/** Date cursor (→ `now`) for date-dedup tags; link-dedup tags dedup by link instead. See CLAUDE.md. */
 export function buildCursorUpdates(
   successfulTags: string[],
-  config: Pick<AppConfig, "whitepaperFeeds">,
+  config: Pick<AppConfig, "feeds">,
   now: Date,
 ): Record<string, Date> {
   const updates: Record<string, Date> = {};
   for (const tag of successfulTags) {
-    if (isWhitepaperTag(config, tag)) continue;
+    if (feedFor(config, tag)?.dedup === "link") continue;
     updates[tag] = now;
   }
   return updates;
@@ -127,7 +127,7 @@ const ENRICH_NEURON_ESTIMATE = 40;
 
 async function maybeEnrich(
   post: Post,
-  feed: NonNullable<ReturnType<typeof getWhitepaperFeedConfig>>,
+  feed: ResolvedFeed,
   env: { AI: Ai },
   config: PipelineConfig,
   opts: {
@@ -176,7 +176,7 @@ export async function tracePost(
   options: { skipSentry?: boolean; skipNeuronAccounting?: boolean } = {},
 ): Promise<PostTrace> {
   const config = ctx.config;
-  const feedConfig = getWhitepaperFeedConfig(config.whitepaperFeeds, post.tag);
+  const feedConfig = getFeedConfig(config.feeds, post.tag);
   let enrichMeta: PostTrace["enrich"];
   let workingBody = post.body;
 
@@ -237,7 +237,6 @@ export async function tracePost(
   let classification: Classification = "UNKNOWN";
   const classifyPost = { ...post, body: workingBody };
   const { classifierPrompt, summaryPrompt } = resolvePrompts(config, post.tag);
-  const isWhitepaper = isWhitepaperTag(config, post.tag);
   try {
     const res = await classifyPostDetailed(classifyPost, {
       ai: env.AI,
@@ -298,7 +297,7 @@ export async function tracePost(
       ai: env.AI,
       model: config.aiModel,
       prompt: summaryPrompt,
-      maxBodyTotal: isWhitepaper ? config.whitepaperMaxBodyTotal : config.maxBodyTotal,
+      maxBodyTotal: feedConfig?.maxBodyTotal ?? config.maxBodyTotal,
       tailSize: config.tailSize,
     });
     summary = {

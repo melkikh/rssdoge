@@ -3,9 +3,9 @@ import {
   arxivPdfUrl,
   documentNameFromUrl,
   enrichTargetUrl,
-  resolveWhitepaperFeed,
+  resolveFeed,
   trySpendEnrichBudget,
-  whitepaperFeedsAsUrls,
+  feedsAsUrls,
 } from "../src/enrich";
 import { KV } from "../src/kv";
 
@@ -21,35 +21,49 @@ describe("arxivPdfUrl", () => {
   });
 });
 
-describe("resolveWhitepaperFeed", () => {
-  it("parses string shorthand", () => {
-    expect(resolveWhitepaperFeed("https://example.com/feed.xml")).toEqual({
+describe("resolveFeed", () => {
+  it("parses string shorthand into a plain news feed", () => {
+    expect(resolveFeed("https://example.com/feed.xml")).toEqual({
       url: "https://example.com/feed.xml",
       readPdf: false,
       enrichBody: false,
       enrichAfterPass: false,
+      dedup: "date",
+      prompts: "news",
+      category: undefined,
+      alwaysRun: false,
+      maxItems: undefined,
+      maxBodyTotal: undefined,
     });
   });
 
-  it("parses object with flags", () => {
+  it("parses object with flags, defaulting the rest", () => {
     expect(
-      resolveWhitepaperFeed({
+      resolveFeed({
         url: "https://arxiv.org/rss",
         readPdf: true,
         enrichBody: true,
+        dedup: "link",
+        prompts: "whitepaper",
       }),
     ).toEqual({
       url: "https://arxiv.org/rss",
       readPdf: true,
       enrichBody: true,
       enrichAfterPass: false,
+      dedup: "link",
+      prompts: "whitepaper",
+      category: undefined,
+      alwaysRun: false,
+      maxItems: undefined,
+      maxBodyTotal: undefined,
     });
   });
 });
 
 describe("enrichTargetUrl", () => {
   it("returns pdf target for readPdf feeds", () => {
-    const feed = resolveWhitepaperFeed({ url: "x", readPdf: true });
+    const feed = resolveFeed({ url: "x", readPdf: true });
     expect(enrichTargetUrl("https://arxiv.org/abs/1234.5678", feed)).toEqual({
       url: "https://arxiv.org/pdf/1234.5678.pdf",
       kind: "pdf",
@@ -57,7 +71,7 @@ describe("enrichTargetUrl", () => {
   });
 
   it("returns page target for enrichBody feeds", () => {
-    const feed = resolveWhitepaperFeed({ url: "x", enrichBody: true });
+    const feed = resolveFeed({ url: "x", enrichBody: true });
     expect(enrichTargetUrl("https://research.google/blog/post", feed)).toEqual({
       url: "https://research.google/blog/post",
       kind: "page",
@@ -79,10 +93,10 @@ describe("trySpendEnrichBudget", () => {
   });
 });
 
-describe("whitepaperFeedsAsUrls", () => {
+describe("feedsAsUrls", () => {
   it("extracts URLs from mixed entries", () => {
     expect(
-      whitepaperFeedsAsUrls({
+      feedsAsUrls({
         arxiv: { url: "https://arxiv.org/rss", readPdf: true },
         elastic: "https://elastic.co/feed.xml",
       }),

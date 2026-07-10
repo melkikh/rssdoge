@@ -11,6 +11,8 @@ Cloudflare Worker: on a cron schedule fetches RSS feeds, summarizes posts via Wo
 
 Technical identifiers (`KV`, `bare header`, `captureException`) stay as-is in any language.
 
+**Chat replies:** answer the user in the language they wrote in (Russian → Russian, English → English). This is separate from the file-language table above, which governs written artifacts, not the conversation.
+
 ## Code comments
 
 Keep comments minimal: only what a human can't easily infer from the code itself (a non-obvious invariant, a gotcha, why-not-the-obvious-thing). Do **not** narrate what the code does or restate design rationale in the source. Rationale, trade-offs, and "why" belong in this file (`CLAUDE.md`) — reference it from a one-line comment (`// … see CLAUDE.md`) instead of duplicating it inline.
@@ -52,7 +54,7 @@ OpenAI-style models (e.g. `@cf/zai-org/glm-4.7-flash`) return `result.choices[0]
 
 ### Two-step LLM pipeline: classify → summarize
 
-For each post with a non-empty `body`, `tracePost()` (`src/pipeline.ts`) runs `classifyPostDetailed()` first (`max_completion_tokens: 10`, one token `PASS`/`SKIP`), then — only if not `SKIP` — `summarizePostDetailed()`. Both take an options object (`{ ai, model, prompt, ... }`). Same model (GLM), different prompts. **Prompt pair is chosen per tag** via `resolvePrompts(config, tag)`: whitepaper feeds (`whitepaperFeeds`) get `whitepaperClassifierPrompt` / `whitepaperPrompt`; everything else gets `classifierPrompt` / `aiPrompt`. More reliable than one hybrid prompt: a small focused classifier task vs. a large multi-task summary.
+For each post with a non-empty `body`, `tracePost()` (`src/pipeline.ts`) runs `classifyPostDetailed()` first (`max_completion_tokens: 10`, one token `PASS`/`SKIP`), then — only if not `SKIP` — `summarizePostDetailed()`. Both take an options object (`{ ai, model, prompt, ... }`). Same model (GLM), different prompts. **Prompt pair is chosen per feed** via `resolvePrompts(config, tag)`: a feed whose entry sets `prompts: "whitepaper"` (only arXiv today) gets `whitepaperClassifierPrompt` / `whitepaperPrompt`; the default (`prompts: "news"`) gets `classifierPrompt` / `aiPrompt`. More reliable than one hybrid prompt: a small focused classifier task vs. a large multi-task summary.
 
 The classifier returns `PASS` / `SKIP` / `UNKNOWN`. On `UNKNOWN` — fall through to summary (don't drop the post) + warning in Glitchtip. `SKIP` is sent silently as a bare header (by design; add logging behind a flag if you want visibility into false-positive skips).
 
@@ -80,13 +82,13 @@ After `ai.run`, the result goes through `sanitizeBullets()`:
 
 On rejection (CJK), `SummaryResult.rejectedReason = "cjk"` — this tag goes to Glitchtip as a warning to track frequency.
 
-### KV cursor (news) vs link-dedup (whitepaper)
+### KV cursor (date) vs link-dedup — chosen by the `dedup` flag
 
-Two different dedup mechanisms by feed type:
+Two dedup mechanisms, selected per feed by the entry's `dedup` field (`"date"` default, `"link"` opt-in). Membership in a separate map is no longer what decides it — read the flag via `feedFor(config, tag)?.dedup`.
 
-**News feeds — date cursor.** `ctx.kv.updateValues(...)` in `finally` (`src/index.ts`) receives a **per-tag** `Record<string, Date>`. `buildCursorUpdates()` sets the cursor to `now` for **news tags only** (whitepaper tags are excluded). Only tags **not in `failedTags`** are updated. A tag is added to `failedTags` on (a) `fetchFeed` failure, (b) `bot.sendMessage` failure on a chunk that included a post from that tag.
+**`dedup: "date"` feeds — date cursor.** `ctx.kv.updateValues(...)` in `finally` (`src/index.ts`) receives a **per-tag** `Record<string, Date>`. `buildCursorUpdates()` sets the cursor to `now`, **skipping tags whose feed sets `dedup: "link"`**. Only tags **not in `failedTags`** are updated. A tag is added to `failedTags` on (a) `fetchFeed` failure, (b) `bot.sendMessage` failure on a chunk that included a post from that tag.
 
-**Whitepaper feeds — link-dedup (KV `seen`), NOT a date cursor.** arXiv gives every entry the same daily `pubDate` (verified) and re-announces old papers (v2/v3, cross-list) with today's date, so a date cursor can neither dedup re-announcements nor keep the same-date backlog. Instead `KV.updateSeen(sent, feedLinks)` stores, per whitepaper tag, the set of already-sent **links**, pruned to **what is currently in the feed**: `seen[tag] = uniq((seen ∪ sent) ∩ feedLinks)`. Retention needs no TTL/cap magic number — a link that dropped out of the feed can't be re-fetched, so it's forgotten; the set self-bounds to feed size. `getContent` filters posts with `link ∈ seen[tag]` before the `whitepaperMaxItemsPerRun` cap. Whitepaper tags therefore always fetch with `since = epoch` (no `ages[tag]` entry). Failure-mode: a link that left the feed and later reappears (weeks-later update) is re-sent once — treated as a legitimately-resurfaced new version.
+**`dedup: "link"` feeds — link-dedup (KV `seen`), NOT a date cursor.** Only arXiv today. arXiv gives every entry the same daily `pubDate` (verified) and re-announces old papers (v2/v3, cross-list) with today's date, so a date cursor can neither dedup re-announcements nor keep the same-date backlog. Instead `KV.updateSeen(sent, feedLinks)` stores, per link-dedup tag, the set of already-sent **links**, pruned to **what is currently in the feed**: `seen[tag] = uniq((seen ∪ sent) ∩ feedLinks)`. Retention needs no TTL/cap magic number — a link that dropped out of the feed can't be re-fetched, so it's forgotten; the set self-bounds to feed size. `getContent` filters posts with `link ∈ seen[tag]` before the feed's `maxItems` cap (oldest-first, via `limitPosts`). Link-dedup tags therefore always fetch with `since = epoch` (no `ages[tag]` entry). Failure-mode: a link that left the feed and later reappears (weeks-later update) is re-sent once — treated as a legitimately-resurfaced new version.
 
 Trade-off (both mechanisms): if one post from a tag fails but another from the same tag succeeds — the cursor / `seen` won't advance for that tag and the succeeded post is resent next run (duplicate). Deliberate: priority is not losing posts; a duplicate is acceptable.
 
@@ -98,7 +100,7 @@ On send failure, the **chunk** fails, not the whole batch: only tags of posts in
 
 ### Workers AI free tier — 10k neurons/day
 
-Shared budget across models. Rough estimate at current cron schedule (`0,30 9-18 mon-fri`, ~20 runs): blog path ~2400 n/day (4× headroom); whitepaper feeds now run **every** invocation (3 feeds, `whitepaperMaxItemsPerRun` 10/tag) — classify is negligible (`max_completion_tokens: 10`), summarize is the cost (~40 n each) but bounded by the daily new-post count (arXiv ~59/day, most SKIP → maybe ~20–40 summarize/day). Still well under 10k — see **Quotas and limits** below. Recalculate when changing models, `updateCount`, `whitepaperMaxItemsPerRun`, or cron. Heavy models may not fit the daily limit at the current cron schedule.
+Shared budget across models. Rough estimate at current cron schedule (`0,30 9-18 mon-fri`, ~20 runs): blog path ~2400 n/day (4× headroom); arXiv (the one `alwaysRun` feed, `maxItems` 10) runs **every** invocation — classify is negligible (`max_completion_tokens: 10`), summarize is the cost (~40 n each) but bounded by the daily new-post count (arXiv ~59/day, most SKIP → maybe ~20–40 summarize/day). Still well under 10k — see **Quotas and limits** below. Recalculate when changing models, `updateCount`, a feed's `maxItems`, or cron. Heavy models may not fit the daily limit at the current cron schedule.
 
 ### Reasoning models consume `max_completion_tokens` on thinking
 
@@ -112,34 +114,32 @@ GLM-4.7-flash and similar reasoning models default to `enable_thinking=true`. Bu
 
 `scope.setLevel("warning")` + `scope.captureMessage(...)` in toucan-js/Glitchtip is **silently dropped** — 0 warning events in the dashboard over 90 days, only errors. Either toucan doesn't propagate level from scope to event, or Glitchtip filters them. Workaround: for "non-fatal but important" signals use `scope.captureException(new Error("Post ended as bare header: ..."))` — they arrive reliably, at the cost of appearing as errors in the dashboard. For grouping by cause use tag `reason` — Glitchtip filter `tag:reason:summary_cjk` works.
 
-### Whitepaper sources (abstract-first)
+### One `feeds` map, per-feed flags
 
-Body comes straight from RSS where available; fuller text via `env.AI.toMarkdown()` when configured.
+There is a **single** feed map, `feeds: Record<string, FeedEntry>` (`src/config.ts`). A bare string entry is a plain news blog with all defaults; an object overrides only what differs. `FeedEntry` / `resolveFeed` / `getFeedConfig` / `feedsAsUrls` live in `src/enrich.ts`; each flag is documented inline on the type. The flags (all optional, defaults in parens): `enrichBody`, `enrichAfterPass`, `readPdf` (false); `dedup` ("date"); `prompts` ("news"); `category` (none); `alwaysRun` (false); `maxItems` / `maxBodyTotal` (unset → `config.maxBodyTotal`). Read them anywhere via `feedFor(config, tag)` in `src/pipeline.ts`.
 
-Feeds in `WHITEPAPER_FEEDS` (`src/config.ts`):
-- **arXiv cs.CR** — **abstract-only** (string entry, no `readPdf`). The abstract is clean author-written know-how; the full PDF via `toMarkdown` is noisy and made the model return empty summaries (`finish_reason=missing`). `arxivPdfUrl()`/`readPdf` still exist but are unused by default — re-enable only with a fallback for empty output.
-- **Google Research blog** — no body in RSS (only a category ~15 chars); fetches page before classify (`enrichBody: true`). URL uses trailing slash `…/blog/rss/` (avoids a redirect).
-- **PortSwigger Research** — RSS teaser ~250 chars; fetches full page after PASS (`enrichAfterPass: true`)
+**"whitepaper" is now exactly arXiv** — the one feed that sets `prompts: "whitepaper"` + `category: "whitepaper"` + `dedup: "link"` + `alwaysRun` + `maxItems`/`maxBodyTotal`. Nothing else is special-cased by map membership.
 
-**Moved out:** **Elastic Security Labs** → regular `feeds` (`FEEDS_PRODUCTION`), not a whitepaper source — it's a marketing/GA-heavy vendor blog. Goes through the strict news `CLASSIFIER_PROMPT` + shorter `AI_PROMPT`, no `#whitepaper` tag. **Rejected earlier:** IACR ePrint (pure theory + fetch issues).
+The three feeds that override defaults:
+- **arXiv cs.CR** — **abstract-only** (`readPdf: false`). The abstract is clean author-written know-how; the full PDF via `toMarkdown` is noisy and made the model return empty summaries (`finish_reason=missing`). `arxivPdfUrl()`/`readPdf` still exist but are unused by default — re-enable only with a fallback for empty output. Link-dedup + always-run + oldest-first `maxItems` 10; `maxBodyTotal` 4000 (vs 10000 news); `#whitepaper` tag; research prompts.
+- **Google Research blog** — regular news feed (news prompts, date cursor, **no** `#whitepaper`). No body in RSS (only a category ~15 chars) → `enrichBody: true` fetches the page before classify. URL uses trailing slash `…/blog/rss/` (avoids a redirect).
+- **PortSwigger Research** — regular news feed. RSS teaser ~250 chars → `enrichAfterPass: true` fetches the full page after PASS.
+
+**Note:** Google/PortSwigger were formerly under a separate `whitepaperFeeds` map only to get enrichment; they are blogs, so they now use the news `CLASSIFIER_PROMPT` + `AI_PROMPT` and carry no `#whitepaper` tag — only enrichment stayed. **Also plain feeds:** **Elastic Security Labs** (marketing/GA-heavy vendor blog). **Rejected earlier:** IACR ePrint (pure theory + fetch issues).
 
 Flow: `fetchFeed()` → `tracePost()`. Enrichment (`src/enrich.ts`): our `fetch(link)` → blob → `env.AI.toMarkdown()` — converter only, not a crawler. Runs before classify (missing body) or after PASS (PDF/full page). Budget: `pdfMaxItemsPerRun` (default 5/run) + KV neuron gate (`neuronGateThreshold` 8000, key `neurons:<UTC-date>`).
 
-Whitepaper posts share the same `Post` type. Domain filter: `whitepaperClassifierPrompt` (strict on product/GA/tech-preview/marketing). Summary via `whitepaperPrompt` (know-how focus, 2–6 bullets). Input cap: `whitepaperMaxItemsPerRun` (10), **oldest-first**; body cap `whitepaperMaxBodyTotal` (4000, vs 10000 news) to curb long full-page summaries. CJK sanitizer uses the **default threshold 2** everywhere — the old per-whitepaper relaxed threshold was wrong (the sanitizer runs on the Russian *output*, not the source abstract, so CJK is always a hallucination).
+Research summary via `whitepaperPrompt` (know-how focus, 2–6 bullets); domain filter `whitepaperClassifierPrompt` (strict on product/GA/tech-preview/marketing). CJK sanitizer uses the **default threshold 2** everywhere — the sanitizer runs on the Russian *output*, not the source abstract, so CJK is always a hallucination.
 
-Whitepaper feeds run **every cron invocation** (`processEvent`: `randomMapElements(config.feeds, ...)` is spread with the full `whitepaperFeedsAsUrls(config.whitepaperFeeds)`) — they're few, and the 50-subrequest cap forbids classifying a full day's arXiv in one run, so the daily backlog is drained across the ~20 runs/day within the feed's window.
+arXiv (`alwaysRun`) runs **every cron invocation** (`processEvent` splits feeds into sampled vs `alwaysRun`: `randomMapElements(<sampled>, updateCount)` spread with all `alwaysRun` URLs) — the 50-subrequest cap forbids classifying a full day's arXiv in one run, so the daily backlog is drained across the ~20 runs/day within the feed's window.
 
-### Prompt routing by tag
+### Prompt routing + category tag
 
-`isWhitepaperTag(config, tag)` and `resolvePrompts(config, tag)` in `src/pipeline.ts`. Whitepaper tags → `whitepaperClassifierPrompt` / `whitepaperPrompt`; else → default pair. Same check drives Telegram category tag (single source of truth).
-
-### Category tag `#whitepaper` in Telegram
-
-`createPostMarkdown(post, bullets, category?)` (`src/utils.ts`): whitepaper tags get `#whitepaper #<tag> <title>` instead of `#<tag> <title>`. Applied on bare headers too.
+`feedFor(config, tag)` (`src/pipeline.ts`) resolves the feed entry; `resolvePrompts(config, tag)` returns the whitepaper pair when `.prompts === "whitepaper"`, else the news pair. The `#whitepaper` Telegram tag is driven by the independent `.category` flag (via `postCategory` in `src/index.ts` → `createPostMarkdown(post, bullets, category?)` in `src/utils.ts`, applied on bare headers too). `prompts` and `category` are separate knobs — a feed could take research prompts without the tag, or vice versa.
 
 ### Tag-scoped RSS feeds
 
-`feeds` / `whitepaperFeeds` are already `tag → url`. Topic slices work as separate tags (e.g. `simonwillison.net/tags/security.atom`). Optional helper pattern: `tagFeeds(base, prefix, tags[])` in config. **Cross-feed dedup:** `fetchFeed` dedupes by `link` within one feed only; overlapping tag feeds from the same source may duplicate (same trade-off as resend-on-partial-failure).
+`feeds` entries are `tag → FeedEntry` (URL string or `{ url, ...flags }`). Topic slices work as separate tags (e.g. `simonwillison.net/tags/security.atom`). Optional helper pattern: `tagFeeds(base, prefix, tags[])` in config. **Cross-feed dedup:** `fetchFeed` dedupes by `link` within one feed only; overlapping tag feeds from the same source may duplicate (same trade-off as resend-on-partial-failure).
 
 ### Quotas and limits (Cloudflare free tier)
 
@@ -158,9 +158,11 @@ Resets at **00:00 UTC**. Subrequests count: `fetch(feed)`, `fetch(pdf/page)`, `b
 
 ### Debug endpoint — pipeline dry-run
 
-`POST /debug/tag/:tag` (auth = same Bearer / `TELEGRAM_TOKEN` in prod; auth disabled in dev). Runs fetch → classify → summarize, returns JSON with `pipeline.step`, `feed_raw`, `classifier`, `summary`, `would_send`. **Does not send to Telegram, does not advance KV.** Works for both blog and whitepaper tags (`allFeeds`). Query: `?since=<ISO>` (cursor override), `?limit=N` (default 3, max 20). Post logic — `tracePost()` in `src/pipeline.ts` (same path as cron). Skill client: `dotenvx run -- node .claude/skills/debug/debug.mjs tag <tag>` — needs `TELEGRAM_TOKEN` in `.env` (same value as the worker secret; CLI doesn't read Cloudflare secrets). Example: `tag arxiv_cscr`.
+`POST /debug/tag/:tag` (auth = same Bearer / `TELEGRAM_TOKEN` in prod; auth disabled in dev). Runs fetch → classify → summarize, returns JSON with `pipeline.step`, `feed_raw`, `classifier`, `summary`, `would_send`. **Does not send to Telegram, does not advance KV.** Works for any tag in `feeds` (`feedsAsUrls(config.feeds)`). Query: `?since=<ISO>` (cursor override), `?limit=N` (default 3, max 20). Post logic — `tracePost()` in `src/pipeline.ts` (same path as cron). Skill client: `dotenvx run -- node .claude/skills/debug/debug.mjs tag <tag>` — needs `TELEGRAM_TOKEN` in `.env` (same value as the worker secret; CLI doesn't read Cloudflare secrets). Example: `tag arxiv_cscr`.
 
 ### Running locally — three loops, fastest first
+
+**`dotenvx` is not on PATH** — it's a local dev-dependency. Every `dotenvx run -- …` in this file and in the skills (`debug`, `glitchtip`) must be invoked as `./node_modules/.bin/dotenvx run -- …` (or `npx dotenvx run -- …`). Bare `dotenvx` fails with exit 127.
 
 1. **Logic only (offline, no Cloudflare):** `npm test` / `npm run check`. Tests are plain `vitest run` — no config file, no workerd, no `@cloudflare/vitest-pool-workers` (not installed). They import `src/*` directly and run in node. This is the main inner loop; most pipeline logic (`sanitizeBullets`, `tracePost`, feed parsing, `chunkParts`) is covered here without booting a worker.
 2. **Pipeline via `wrangler dev` (no Telegram, no KV writes):** terminal A `npm run dev` (dotenvx decrypts `.env` → `wrangler dev --port 3000`, `ENVIRONMENT=development` → `development` config branch: `authentication: false`, dev feeds, dev chatID). Terminal B: `RSSDOGE_BASE_URL=http://127.0.0.1:3000 dotenvx run -- node .claude/skills/debug/debug.mjs tag <tag>`. Uses the debug endpoint (above) — dry-run, no send, no cursor move.

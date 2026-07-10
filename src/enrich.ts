@@ -1,49 +1,71 @@
-export type WhitepaperFeedEntry =
-  | string
+// One feed map, one entry type. Bare string = blog with all defaults; object overrides only what differs.
+export type FeedEntry =
+  | string // блог: дедуп по дате, новостные промпты, случайная выборка, без enrichment
   | {
       url: string;
-      /** After PASS: fetch PDF (arXiv abs → pdf). */
-      readPdf?: boolean;
-      /** Before classify when body is short/missing: fetch HTML page. */
-      enrichBody?: boolean;
-      /** After PASS: fetch HTML page for full text (teaser-only RSS). */
-      enrichAfterPass?: boolean;
+      enrichBody?: boolean;      // дотянуть страницу ДО классификации, если тело пустое/короткое (Google)
+      enrichAfterPass?: boolean; // дотянуть полную страницу ПОСЛЕ PASS (тизер-only RSS: PortSwigger)
+      readPdf?: boolean;         // после PASS тянуть PDF (arXiv abs→pdf); сейчас выключено, см. CLAUDE.md
+      dedup?: "date" | "link";   // "date" — курсор по дате (деф.); "link" — по ссылкам (arXiv: одинаковый pubDate)
+      prompts?: "news" | "whitepaper"; // пара классификатор+суммаризатор (деф. "news")
+      category?: "whitepaper";   // добавить тег #whitepaper в заголовок Telegram
+      alwaysRun?: boolean;       // запускать каждый cron-прогон мимо случайной выборки (дренаж бэклога)
+      maxItems?: number;         // кап постов/прогон, oldest-first (дренаж при dedup по ссылкам)
+      maxBodyTotal?: number;     // override лимита тела для суммаризации (деф. config.maxBodyTotal)
     };
 
-export type ResolvedWhitepaperFeed = {
+export type ResolvedFeed = {
   url: string;
   readPdf: boolean;
   enrichBody: boolean;
   enrichAfterPass: boolean;
+  dedup: "date" | "link";
+  prompts: "news" | "whitepaper";
+  category?: "whitepaper";
+  alwaysRun: boolean;
+  maxItems?: number;
+  maxBodyTotal?: number;
 };
 
-export function resolveWhitepaperFeed(entry: WhitepaperFeedEntry): ResolvedWhitepaperFeed {
+export function resolveFeed(entry: FeedEntry): ResolvedFeed {
   if (typeof entry === "string") {
-    return { url: entry, readPdf: false, enrichBody: false, enrichAfterPass: false };
+    return {
+      url: entry,
+      readPdf: false,
+      enrichBody: false,
+      enrichAfterPass: false,
+      dedup: "date",
+      prompts: "news",
+      alwaysRun: false,
+    };
   }
   return {
     url: entry.url,
     readPdf: entry.readPdf ?? false,
     enrichBody: entry.enrichBody ?? false,
     enrichAfterPass: entry.enrichAfterPass ?? false,
+    dedup: entry.dedup ?? "date",
+    prompts: entry.prompts ?? "news",
+    category: entry.category,
+    alwaysRun: entry.alwaysRun ?? false,
+    maxItems: entry.maxItems,
+    maxBodyTotal: entry.maxBodyTotal,
   };
 }
 
-export function whitepaperFeedsAsUrls(
-  feeds: Record<string, WhitepaperFeedEntry>,
-): Record<string, string> {
+export function feedsAsUrls(feeds: Record<string, FeedEntry>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(feeds).map(([tag, entry]) => [tag, resolveWhitepaperFeed(entry).url]),
+    Object.entries(feeds).map(([tag, entry]) => [tag, resolveFeed(entry).url]),
   );
 }
 
-export function getWhitepaperFeedConfig(
-  feeds: Record<string, WhitepaperFeedEntry>,
+export function getFeedConfig(
+  feeds: Record<string, FeedEntry>,
   tag: string,
-): ResolvedWhitepaperFeed | null {
+): ResolvedFeed | null {
   const entry = feeds[tag];
   if (!entry) return null;
-  return resolveWhitepaperFeed(entry);
+  return resolveFeed(entry);
 }
 
 /** arXiv abs URL → PDF URL. */
@@ -55,7 +77,7 @@ export function arxivPdfUrl(link: string): string | null {
 
 export function enrichTargetUrl(
   link: string,
-  feed: ResolvedWhitepaperFeed,
+  feed: ResolvedFeed,
 ): { url: string; kind: "pdf" | "page" } | null {
   if (feed.readPdf) {
     const pdf = arxivPdfUrl(link);
@@ -137,7 +159,7 @@ export type EnrichResult = {
 
 export async function enrichPostBody(
   link: string,
-  feed: ResolvedWhitepaperFeed,
+  feed: ResolvedFeed,
   env: { AI: Ai },
   opts: { timeoutMs: number; budget?: EnrichBudget },
 ): Promise<EnrichResult> {

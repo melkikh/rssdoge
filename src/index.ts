@@ -6,9 +6,9 @@ import { Telegram } from "./telegram";
 import { KV } from "./kv";
 import { fetchFeed } from "./feed";
 import type { Post } from "./feed";
-import { whitepaperFeedsAsUrls } from "./enrich";
+import { feedsAsUrls, resolveFeed } from "./enrich";
 import { sortDate, createPostMarkdown, initSentry, randomMapElements, chunkParts } from "./utils";
-import { tracePost, bodyPreview, estimateNeurons, isWhitepaperTag, buildCursorUpdates } from "./pipeline";
+import { tracePost, bodyPreview, estimateNeurons, feedFor, buildCursorUpdates } from "./pipeline";
 import type { PostTrace } from "./pipeline";
 
 /** Cloudflare's ExecutionContext with the app singletons we attach per request/cron. */
@@ -18,19 +18,17 @@ type Ctx = ExecutionContext & {
   sentry: Toucan;
 };
 
-function allFeeds(config: AppConfig): Record<string, string> {
-  return { ...config.feeds, ...whitepaperFeedsAsUrls(config.whitepaperFeeds) };
-}
-
-function limitWhitepaperPosts(posts: Post[], tag: string, config: AppConfig): Post[] {
-  if (!isWhitepaperTag(config, tag)) return posts;
+/** Oldest-first cap for feeds that set `maxItems` (link-dedup drain); others pass through. */
+function limitPosts(posts: Post[], tag: string, config: AppConfig): Post[] {
+  const max = feedFor(config, tag)?.maxItems;
+  if (max === undefined) return posts;
   return [...posts]
     .sort((a, b) => a.date.getTime() - b.date.getTime())
-    .slice(0, config.whitepaperMaxItemsPerRun);
+    .slice(0, max);
 }
 
 function postCategory(config: AppConfig, tag: string): "whitepaper" | undefined {
-  return isWhitepaperTag(config, tag) ? "whitepaper" : undefined;
+  return feedFor(config, tag)?.category;
 }
 
 const authMiddleware = (request: IRequest, env: Env, ctx: Ctx) => {
@@ -60,7 +58,7 @@ async function versionHandler(request: IRequest, env: Env) {
 
 async function indexHandler(request: IRequest, env: Env, ctx: Ctx) {
   const ages = await ctx.kv.getAll();
-  const tags = Object.keys(allFeeds(ctx.config))
+  const tags = Object.keys(ctx.config.feeds)
     .sort()
     .map((tag) => ({ tag, updated_at: ages[tag] ?? null }));
   return json({ tags });
@@ -73,12 +71,12 @@ async function getContent(
   seen: Record<string, string[]>,
 ) {
   const failedTags = new Set<string>();
-  // Full link set per whitepaper feed (pre-filter), used to prune KV `seen` to the feed.
+  // Full link set per link-dedup feed (pre-filter), used to prune KV `seen` to the feed.
   const feedLinksByTag: Record<string, string[]> = {};
   const results = await Promise.all(
     Object.keys(feeds).map(async (tag) => {
-      const isWhitepaper = isWhitepaperTag(ctx.config, tag);
-      const sinceDate = !isWhitepaper && ages[tag] ? new Date(ages[tag]) : new Date(0);
+      const linkDedup = feedFor(ctx.config, tag)?.dedup === "link";
+      const sinceDate = !linkDedup && ages[tag] ? new Date(ages[tag]) : new Date(0);
       try {
         const url = feeds[tag];
         const start = performance.now();
@@ -90,11 +88,11 @@ async function getContent(
         });
         const end = performance.now();
         console.log(`Fetching '${tag}' feed took ${end - start}ms`);
-        if (!isWhitepaper) return items;
+        if (!linkDedup) return items;
         feedLinksByTag[tag] = items.map((p) => p.link);
         const seenSet = new Set(seen[tag] ?? []);
         const fresh = items.filter((p) => !seenSet.has(p.link));
-        return limitWhitepaperPosts(fresh, tag, ctx.config);
+        return limitPosts(fresh, tag, ctx.config);
       } catch (err) {
         ctx.sentry.captureException(new Error(`Failed to fetch '${tag}' feed`, { cause: err }));
         failedTags.add(tag);
@@ -156,7 +154,7 @@ function formatDebugPost(post: Post, trace: PostTrace, config: AppConfig) {
 
 async function debugTagHandler(request: IRequest, env: Env, ctx: Ctx) {
   const tag = request.params?.tag;
-  const feeds = allFeeds(ctx.config);
+  const feeds = feedsAsUrls(ctx.config.feeds);
 
   if (!tag || !feeds[tag]) {
     return json({ error: "unknown tag", tag }, { status: 400 });
@@ -232,10 +230,16 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
   });
   const ages = await ctx.kv.getAll();
   const seen = await ctx.kv.getSeen();
-  // News sampled randomly; whitepaper feeds run every time (see CLAUDE.md).
+  // Sampled feeds picked randomly; `alwaysRun` feeds run every time (see CLAUDE.md).
+  const sampledUrls: Record<string, string> = {};
+  const alwaysRunUrls: Record<string, string> = {};
+  for (const [tag, entry] of Object.entries(ctx.config.feeds)) {
+    const resolved = resolveFeed(entry);
+    (resolved.alwaysRun ? alwaysRunUrls : sampledUrls)[tag] = resolved.url;
+  }
   const feeds = {
-    ...randomMapElements(ctx.config.feeds, ctx.config.updateCount),
-    ...whitepaperFeedsAsUrls(ctx.config.whitepaperFeeds),
+    ...randomMapElements(sampledUrls, ctx.config.updateCount),
+    ...alwaysRunUrls,
   };
   const { content, failedTags, feedLinksByTag } = await getContent(ctx, feeds, ages, seen);
   const sentLinksByTag: Record<string, string[]> = {};
@@ -252,7 +256,7 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
         logTraceBareHeaders(ctx, post, trace);
         const category = postCategory(ctx.config, post.tag);
         parts.push({ post, text: createPostMarkdown(post, trace.bullets, category) });
-        if (isWhitepaperTag(ctx.config, post.tag)) {
+        if (feedFor(ctx.config, post.tag)?.dedup === "link") {
           (sentLinksByTag[post.tag] ??= []).push(post.link);
         }
       }
