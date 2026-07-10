@@ -7,7 +7,7 @@ export type FeedEntry =
       enrichAfterPass?: boolean; // дотянуть полную страницу ПОСЛЕ PASS (тизер-only RSS: PortSwigger)
       readPdf?: boolean;         // после PASS тянуть PDF (arXiv abs→pdf); сейчас выключено, см. CLAUDE.md
       dedup?: "date" | "link";   // "date" — курсор по дате (деф.); "link" — по ссылкам (arXiv: одинаковый pubDate)
-      prompts?: "news" | "whitepaper"; // пара классификатор+суммаризатор (деф. "news")
+      prompts?: "news" | "whitepaper" | "essay"; // пара классификатор+суммаризатор (деф. "news"); "essay" — авторские колонки/мнения (Schneier, Venables)
       category?: "whitepaper";   // добавить тег #whitepaper в заголовок Telegram
       alwaysRun?: boolean;       // запускать каждый cron-прогон мимо случайной выборки (дренаж бэклога)
       maxItems?: number;         // кап постов/прогон, oldest-first (дренаж при dedup по ссылкам)
@@ -20,7 +20,7 @@ export type ResolvedFeed = {
   enrichBody: boolean;
   enrichAfterPass: boolean;
   dedup: "date" | "link";
-  prompts: "news" | "whitepaper";
+  prompts: "news" | "whitepaper" | "essay";
   category?: "whitepaper";
   alwaysRun: boolean;
   maxItems?: number;

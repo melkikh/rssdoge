@@ -30,6 +30,8 @@ export interface AppConfig {
   feeds: Record<string, FeedEntry>;
   whitepaperClassifierPrompt: string;
   whitepaperPrompt: string;
+  essayClassifierPrompt: string;
+  essayPrompt: string;
   pdfMaxItemsPerRun: number;
   neuronDailyLimit: number;
   neuronGateThreshold: number;
@@ -128,6 +130,46 @@ const WHITEPAPER_PROMPT = `Пишешь для безопасников и ин�
 
 Формат: только пункты, каждый с новой строки, с "- "; без вступления и без финального обобщения.`;
 
+// Авторские колонки/эссе (Schneier, Venables): пропускаем мнение и ключевые идеи, техноу-хау там нет.
+const ESSAY_CLASSIFIER_PROMPT = `Ты классификатор эссе и авторских колонок по безопасности для канала для безопасников и инженеров. Это тексты с мнением: аналитика, взгляд на индустрию, приватность, ИИ, риски, управление безопасностью.
+
+Отвечай ровно одним словом: PASS или SKIP. Без пояснений, без знаков препинания.
+
+PASS если пост несёт авторскую мысль: мнение, аргумент, позицию, разбор тренда или проблемы, ключевые идеи и выводы — даже без технических деталей.
+
+SKIP если пост:
+- маркетинг, PR, анонс продукта, реклама;
+- анонс награды, партнёрской программы, вакансии, конференции, юбилея;
+- пуст, удалён, содержит "[removed]", "[deleted]", только ссылку или только заголовок без тела.
+
+Один пост — один ответ: PASS или SKIP.`;
+
+const ESSAY_PROMPT = `Пишешь для безопасников и инженеров. Это авторское эссе или колонка — мнение, аналитика, взгляд на индустрию. Не ищи в нём технических деталей (CVE, версий, PoC) — их там обычно нет, выдумывать нельзя.
+
+Язык вывода — только русский. Никаких иероглифов (китайский / японский / корейский). Устоявшиеся англоязычные термины оставляй латиницей, можно склонять. Названия продуктов, брендов, инструментов — точно как в оригинале, латиницей. Никогда не транслитерируй их.
+
+В пользовательском сообщении даётся заголовок (Title) и текст. Если текст длинный — сшиты начало и конец, середина «...» — опирайся на то, что попало в запрос.
+
+Опирайся только на то, что есть в тексте. Не выдумывай факты, имена, цифры, атрибуцию.
+
+Задача — передать суть авторской позиции: главный тезис, ключевые идеи и аргументы, нетривиальные выводы. Каждый буллит = одна мысль автора, а не пересказ структуры текста.
+
+Тон: как коллеге за кофе, по делу. Без канцелярита и пафоса. Без вводных «в статье говорится», «автор рассказывает», «как сообщается» — сразу к мысли. Не начинай каждый буллит с «автор считает» — весь текст и так его мнение.
+
+Не пересказывай общие места и мотивацию («тема важна», «мир меняется»). Если мысль банальна — не выноси её в буллит.
+
+Длина: 2–5 буллитов, обычно 3. Лучше плотно и коротко, чем длинно с водой.
+
+Запрещено:
+- дублировать информацию между буллитами и повторять мысль другими словами;
+- капитанские выводы и общие фразы;
+- метакомментарии о тексте;
+- переводить устоявшиеся англоязычные термины;
+- финальные «итого» / «вывод»;
+- любой markdown (backticks, **bold**, ## заголовки, code fences) — только plain text.
+
+Формат: только пункты, каждый с новой строки, с "- "; без вступления и без финального обобщения.`;
+
 const FEEDS_PRODUCTION: Record<string, FeedEntry> = {
   // The one true whitepaper: link-dedup (same daily pubDate), research prompts, #whitepaper tag,
   // always-run + oldest-first drain of the backlog. See CLAUDE.md.
@@ -168,10 +210,14 @@ const FEEDS_PRODUCTION: Record<string, FeedEntry> = {
   unskilled: "https://unskilled.blog/index.xml",
   rami_mac: "https://ramimac.me/feed.xml",
   kanenarraway: "https://kanenarraway.com/index.xml",
-  bruce_schneier: "https://www.schneier.com/feed/atom",
+  bruce_schneier: { url: "https://www.schneier.com/feed/atom", prompts: "essay" },
   badprivacy: "https://medium.com/feed/@badprivacy",
   oblique_security: "https://oblique.security/blog/feed.xml",
-  philvenables: "https://www.philvenables.com/blog-feed.xml",
+  philvenables: {
+    url: "https://www.philvenables.com/blog-feed.xml",
+    prompts: "essay",
+    enrichAfterPass: true, // RSS отдаёт только тизер ~500 символов — тянем полную страницу после PASS
+  },
   pilotprotocol: "https://pilotprotocol.network/blog/feed.xml",
 };
 
@@ -199,6 +245,8 @@ export default function config(env: Env): AppConfig {
     postsPerMessage: 5,
     whitepaperClassifierPrompt: WHITEPAPER_CLASSIFIER_PROMPT,
     whitepaperPrompt: WHITEPAPER_PROMPT,
+    essayClassifierPrompt: ESSAY_CLASSIFIER_PROMPT,
+    essayPrompt: ESSAY_PROMPT,
     pdfMaxItemsPerRun: 5,
     neuronDailyLimit: 10000,
     neuronGateThreshold: 8000,

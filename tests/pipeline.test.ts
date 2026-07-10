@@ -20,9 +20,15 @@ const testConfig = {
       category: "whitepaper" as const,
       maxBodyTotal: 4000,
     },
+    bruce_schneier: {
+      url: "https://www.schneier.com/feed/atom",
+      prompts: "essay" as const,
+    },
   },
   whitepaperClassifierPrompt: "wp-classifier",
   whitepaperPrompt: "wp-summarizer",
+  essayClassifierPrompt: "essay-classifier",
+  essayPrompt: "essay-summarizer",
   feedTimeoutMs: 10000,
   neuronGateThreshold: 8000,
 };
@@ -125,6 +131,13 @@ describe("resolvePrompts", () => {
     expect(resolvePrompts(testConfig, "arxiv_cscr")).toEqual({
       classifierPrompt: "wp-classifier",
       summaryPrompt: "wp-summarizer",
+    });
+  });
+
+  it("returns essay pair for essay tags", () => {
+    expect(resolvePrompts(testConfig, "bruce_schneier")).toEqual({
+      classifierPrompt: "essay-classifier",
+      summaryPrompt: "essay-summarizer",
     });
   });
 

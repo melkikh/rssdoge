@@ -54,7 +54,7 @@ OpenAI-style models (e.g. `@cf/zai-org/glm-4.7-flash`) return `result.choices[0]
 
 ### Two-step LLM pipeline: classify → summarize
 
-For each post with a non-empty `body`, `tracePost()` (`src/pipeline.ts`) runs `classifyPostDetailed()` first (`max_completion_tokens: 10`, one token `PASS`/`SKIP`), then — only if not `SKIP` — `summarizePostDetailed()`. Both take an options object (`{ ai, model, prompt, ... }`). **Two models, split by stage** (`config.ts`): `classifierModel` = GLM (`@cf/zai-org/glm-4.7-flash` — CJK is irrelevant for a one-token `PASS`/`SKIP`), `summaryModel` = Gemma (`@cf/google/gemma-4-26b-a4b-it`). The debug endpoint can override either per-run (`?model=` for summary, `?classifierModel=`) for A/B testing. **Prompt pair is chosen per feed** via `resolvePrompts(config, tag)`: a feed whose entry sets `prompts: "whitepaper"` (only arXiv today) gets `whitepaperClassifierPrompt` / `whitepaperPrompt`; the default (`prompts: "news"`) gets `classifierPrompt` / `aiPrompt`. More reliable than one hybrid prompt: a small focused classifier task vs. a large multi-task summary.
+For each post with a non-empty `body`, `tracePost()` (`src/pipeline.ts`) runs `classifyPostDetailed()` first (`max_completion_tokens: 10`, one token `PASS`/`SKIP`), then — only if not `SKIP` — `summarizePostDetailed()`. Both take an options object (`{ ai, model, prompt, ... }`). **Two models, split by stage** (`config.ts`): `classifierModel` = GLM (`@cf/zai-org/glm-4.7-flash` — CJK is irrelevant for a one-token `PASS`/`SKIP`), `summaryModel` = Gemma (`@cf/google/gemma-4-26b-a4b-it`). The debug endpoint can override either per-run (`?model=` for summary, `?classifierModel=`) for A/B testing. **Prompt pair is chosen per feed** via `resolvePrompts(config, tag)`: `prompts: "whitepaper"` (only arXiv today) gets `whitepaperClassifierPrompt` / `whitepaperPrompt`; `prompts: "essay"` (Schneier + Venables) gets `essayClassifierPrompt` / `essayPrompt`; the default (`prompts: "news"`) gets `classifierPrompt` / `aiPrompt`. More reliable than one hybrid prompt: a small focused classifier task vs. a large multi-task summary. **The "essay" pair** exists because the news classifier `PASS`es only technical content (vulns/attacks/tools/incidents), so opinion/analysis columns (AI, privacy, security policy, leadership) were all `SKIP`'d → bare headers. `essayClassifierPrompt` instead `PASS`es any post carrying an author's argument/idea (still `SKIP`s marketing/product/vacancy/award); `essayPrompt` keeps brevity but summarizes the thesis and key ideas rather than hunting technical know-how (there is none in these).
 
 The classifier returns `PASS` / `SKIP` / `UNKNOWN`. On `UNKNOWN` — fall through to summary (don't drop the post) + warning in Glitchtip. `SKIP` is sent silently as a bare header (by design; add logging behind a flag if you want visibility into false-positive skips).
 
@@ -124,7 +124,7 @@ GLM-4.7-flash and similar reasoning models default to `enable_thinking=true`. Bu
 
 ### One `feeds` map, per-feed flags
 
-There is a **single** feed map, `feeds: Record<string, FeedEntry>` (`src/config.ts`). A bare string entry is a plain news blog with all defaults; an object overrides only what differs. `FeedEntry` / `resolveFeed` / `getFeedConfig` / `feedsAsUrls` live in `src/enrich.ts`; each flag is documented inline on the type. The flags (all optional, defaults in parens): `enrichBody`, `enrichAfterPass`, `readPdf` (false); `dedup` ("date"); `prompts` ("news"); `category` (none); `alwaysRun` (false); `maxItems` / `maxBodyTotal` (unset → `config.maxBodyTotal`). Read them anywhere via `feedFor(config, tag)` in `src/pipeline.ts`.
+There is a **single** feed map, `feeds: Record<string, FeedEntry>` (`src/config.ts`). A bare string entry is a plain news blog with all defaults; an object overrides only what differs. `FeedEntry` / `resolveFeed` / `getFeedConfig` / `feedsAsUrls` live in `src/enrich.ts`; each flag is documented inline on the type. The flags (all optional, defaults in parens): `enrichBody`, `enrichAfterPass`, `readPdf` (false); `dedup` ("date"); `prompts` ("news" | "whitepaper" | "essay", default "news"); `category` (none); `alwaysRun` (false); `maxItems` / `maxBodyTotal` (unset → `config.maxBodyTotal`). Read them anywhere via `feedFor(config, tag)` in `src/pipeline.ts`.
 
 **"whitepaper" is now exactly arXiv** — the one feed that sets `prompts: "whitepaper"` + `category: "whitepaper"` + `dedup: "link"` + `alwaysRun` + `maxItems`/`maxBodyTotal`. Nothing else is special-cased by map membership.
 
@@ -132,6 +132,8 @@ The three feeds that override defaults:
 - **arXiv cs.CR** — **abstract-only** (`readPdf: false`). The abstract is clean author-written know-how; the full PDF via `toMarkdown` is noisy and made the model return empty summaries (`finish_reason=missing`). `arxivPdfUrl()`/`readPdf` still exist but are unused by default — re-enable only with a fallback for empty output. Link-dedup + always-run + oldest-first `maxItems` 10; `maxBodyTotal` 4000 (vs 10000 news); `#whitepaper` tag; research prompts.
 - **Google Research blog** — regular news feed (news prompts, date cursor, **no** `#whitepaper`). No body in RSS (only a category ~15 chars) → `enrichBody: true` fetches the page before classify. URL uses trailing slash `…/blog/rss/` (avoids a redirect).
 - **PortSwigger Research** — regular news feed. RSS teaser ~250 chars → `enrichAfterPass: true` fetches the full page after PASS.
+- **Bruce Schneier** (`bruce_schneier`) — `prompts: "essay"`, no enrichment (full body in RSS ~6k chars).
+- **Phil Venables** (`philvenables`) — `prompts: "essay"` + `enrichAfterPass: true` (RSS `description` is a ~500-char teaser, like PortSwigger; fetch the full page after PASS).
 
 **Note:** Google/PortSwigger were formerly under a separate `whitepaperFeeds` map only to get enrichment; they are blogs, so they now use the news `CLASSIFIER_PROMPT` + `AI_PROMPT` and carry no `#whitepaper` tag — only enrichment stayed. **Also plain feeds:** **Elastic Security Labs** (marketing/GA-heavy vendor blog). **Rejected earlier:** IACR ePrint (pure theory + fetch issues).
 
@@ -143,7 +145,7 @@ arXiv (`alwaysRun`) runs **every cron invocation** (`processEvent` splits feeds 
 
 ### Prompt routing + category tag
 
-`feedFor(config, tag)` (`src/pipeline.ts`) resolves the feed entry; `resolvePrompts(config, tag)` returns the whitepaper pair when `.prompts === "whitepaper"`, else the news pair. The `#whitepaper` Telegram tag is driven by the independent `.category` flag (via `postCategory` in `src/index.ts` → `createPostMarkdown(post, bullets, category?)` in `src/utils.ts`, applied on bare headers too). `prompts` and `category` are separate knobs — a feed could take research prompts without the tag, or vice versa.
+`feedFor(config, tag)` (`src/pipeline.ts`) resolves the feed entry; `resolvePrompts(config, tag)` returns the whitepaper pair when `.prompts === "whitepaper"`, the essay pair when `.prompts === "essay"`, else the news pair. The `#whitepaper` Telegram tag is driven by the independent `.category` flag (via `postCategory` in `src/index.ts` → `createPostMarkdown(post, bullets, category?)` in `src/utils.ts`, applied on bare headers too). `prompts` and `category` are separate knobs — a feed could take research prompts without the tag, or vice versa.
 
 ### Tag-scoped RSS feeds
 
@@ -158,9 +160,11 @@ arXiv (`alwaysRun`) runs **every cron invocation** (`processEvent` splits feeds 
 | **Subrequests / invocation** | **50** | **Main ceiling** for future PDF stage |
 | Workers AI neurons/day | 10 000 | Summarize; classify negligible |
 
-Resets at **00:00 UTC**. Subrequests count: `fetch(feed)`, `fetch(pdf/page)`, `bot.sendMessage`, `ai.run`, `env.AI.toMarkdown()`.
+Resets at **00:00 UTC**. Subrequests count: `fetch(feed)`, `fetch(pdf/page)`, `bot.sendMessage`, `ai.run`, `env.AI.toMarkdown()` — **and every KV `get`/`put`** (a KV binding call is a subrequest). The KV ops are why the budget is tighter than the AI-only estimate suggests: a run draining arXiv (`alwaysRun`, `maxItems` 10 → 10× `ai.run`) plus ~`updateCount` feed fetches sits close to 50, so per-post KV writes matter.
 
-**KV neuron counter:** `KV.neuronsKey()` → `neurons:<YYYY-MM-DD>` (UTC). `addNeuronEstimate()` after each post in cron; `canSpendNeurons()` gates enrich before `fetch`+`toMarkdown`. Estimate only (~2 classify, ~40 summarize per post), not exact billing.
+**KV neuron counter:** `KV.neuronsKey()` → `neurons:<YYYY-MM-DD>` (UTC). `addNeuronEstimate()` is called **once per cron run** — the delta is accumulated in memory across posts (`neuronDelta`) and flushed in the `finally`, not written per post. Per-post writes cost 2 subrequests each (pushing a busy arXiv run over the 50 cap) and, being uncaught inside the loop, could abort the run before the `seen` write — which is exactly how arXiv posts got resent. `canSpendNeurons()` still gates enrich before `fetch`+`toMarkdown`, but it reads the start-of-run total (in-run accumulation isn't visible until the flush); safe because per-run enrich is separately capped by `pdfMaxItemsPerRun`. Estimate only (~2 classify, ~40 summarize per post), not exact billing.
+
+**Resilient KV writes in `finally`:** the date cursor (`updateValues`), link-dedup `seen` (`updateSeen`), and neuron estimate are each wrapped in their own `try/catch` + `captureException`. They are independent — a throw in one must not skip the others. Previously all three were unguarded and sequential, so a failure in `updateValues` silently prevented `updateSeen`, resending link-dedup feeds (arXiv) indefinitely. `scheduled()` also wraps `processEvent` in a capture (then rethrows): it has no router/Toucan wrapper, so an uncaught throw there (resource limit, KV error) was otherwise invisible in Glitchtip.
 
 **Enrich budget:** `pdfMaxItemsPerRun` (5) caps `fetch`+`toMarkdown` per cron/debug run — main guard on free-tier 50 subrequests/invocation.
 

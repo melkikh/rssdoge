@@ -24,6 +24,8 @@ export type PipelineConfig = Pick<
   | "feeds"
   | "whitepaperClassifierPrompt"
   | "whitepaperPrompt"
+  | "essayClassifierPrompt"
+  | "essayPrompt"
   | "feedTimeoutMs"
   | "neuronGateThreshold"
 >;
@@ -70,13 +72,29 @@ export function feedFor(config: Pick<AppConfig, "feeds">, tag: string): Resolved
 }
 
 export function resolvePrompts(
-  config: Pick<AppConfig, "classifierPrompt" | "aiPrompt" | "feeds" | "whitepaperClassifierPrompt" | "whitepaperPrompt">,
+  config: Pick<
+    AppConfig,
+    | "classifierPrompt"
+    | "aiPrompt"
+    | "feeds"
+    | "whitepaperClassifierPrompt"
+    | "whitepaperPrompt"
+    | "essayClassifierPrompt"
+    | "essayPrompt"
+  >,
   tag: string,
 ): { classifierPrompt: string; summaryPrompt: string } {
-  if (feedFor(config, tag)?.prompts === "whitepaper") {
+  const prompts = feedFor(config, tag)?.prompts;
+  if (prompts === "whitepaper") {
     return {
       classifierPrompt: config.whitepaperClassifierPrompt,
       summaryPrompt: config.whitepaperPrompt,
+    };
+  }
+  if (prompts === "essay") {
+    return {
+      classifierPrompt: config.essayClassifierPrompt,
+      summaryPrompt: config.essayPrompt,
     };
   }
   return {

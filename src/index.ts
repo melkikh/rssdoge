@@ -273,6 +273,10 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
   const { content, failedTags, feedLinksByTag } = await getContent(ctx, feeds, ages, seen);
   const sentLinksByTag: Record<string, string[]> = {};
   const enrichBudget = { remaining: ctx.config.pdfMaxItemsPerRun, spent: 0 };
+  // Accumulated in memory, flushed once in `finally` — a per-post KV write here burns
+  // 2 subrequests/post toward the 50/invocation cap and, uncaught, could abort the run
+  // and drop the `seen` write. See CLAUDE.md.
+  let neuronDelta = 0;
 
   try {
     for (let i = 0; i < content.length; i += ctx.config.postsPerMessage) {
@@ -281,7 +285,7 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
 
       for (const post of batch) {
         const trace = await tracePost(post, env, { ...ctx, enrichBudget });
-        await ctx.kv.addNeuronEstimate(estimateNeurons([trace]));
+        neuronDelta += estimateNeurons([trace]);
         logTraceBareHeaders(ctx, post, trace);
         logMixedScript(ctx, post, trace);
         const category = postCategory(ctx.config, post.tag);
@@ -304,10 +308,19 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
       }
     }
   } finally {
+    // Each KV write is isolated: one failing must not skip the others. Notably the date
+    // cursor and the link-dedup `seen` are independent — a throw in `updateValues` used to
+    // silently prevent `updateSeen`, resending link-dedup feeds (arXiv) forever. See CLAUDE.md.
     const successfulTags = Object.keys(feeds).filter(tag => !failedTags.has(tag));
     if (successfulTags.length > 0) {
       const updates = buildCursorUpdates(successfulTags, ctx.config, now);
-      if (Object.keys(updates).length > 0) await ctx.kv.updateValues(updates);
+      if (Object.keys(updates).length > 0) {
+        try {
+          await ctx.kv.updateValues(updates);
+        } catch (err) {
+          ctx.sentry.captureException(new Error("Failed to persist date cursors", { cause: err }));
+        }
+      }
     }
     const sentForSuccess: Record<string, string[]> = {};
     const feedLinksForSuccess: Record<string, string[]> = {};
@@ -317,7 +330,18 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
       if (sentLinksByTag[tag]) sentForSuccess[tag] = sentLinksByTag[tag];
     }
     if (Object.keys(feedLinksForSuccess).length > 0) {
-      await ctx.kv.updateSeen(sentForSuccess, feedLinksForSuccess);
+      try {
+        await ctx.kv.updateSeen(sentForSuccess, feedLinksForSuccess);
+      } catch (err) {
+        ctx.sentry.captureException(new Error("Failed to persist seen links", { cause: err }));
+      }
+    }
+    if (neuronDelta > 0) {
+      try {
+        await ctx.kv.addNeuronEstimate(neuronDelta);
+      } catch (err) {
+        ctx.sentry.captureException(new Error("Failed to persist neuron estimate", { cause: err }));
+      }
     }
   }
 }
@@ -343,6 +367,13 @@ export default {
     ctx.config = config(env);
     ctx.kv = new KV({ kv: env.RSSDOGE });
     ctx.sentry = initSentry(event, env, ctx);
-    return await processEvent(event, env, ctx);
+    // scheduled() has no router/capture wrapper — an uncaught throw here (resource limit,
+    // KV error) is invisible in Glitchtip. Capture, then rethrow so CF marks the cron failed.
+    try {
+      return await processEvent(event, env, ctx);
+    } catch (err) {
+      ctx.sentry.captureException(new Error("scheduled() failed", { cause: err }));
+      throw err;
+    }
   },
 };
