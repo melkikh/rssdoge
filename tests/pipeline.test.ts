@@ -4,7 +4,8 @@ import { tracePost, resolvePrompts, feedFor, buildCursorUpdates } from "../src/p
 
 const testConfig = {
   minBodyChars: 100,
-  aiModel: "@cf/zai-org/glm-4.7-flash",
+  classifierModel: "@cf/zai-org/glm-4.7-flash",
+  summaryModel: "@cf/zai-org/glm-4.7-flash",
   classifierPrompt: "classifier",
   classifierMaxBodyChars: 2000,
   aiPrompt: "summarizer",

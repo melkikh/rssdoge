@@ -17,7 +17,8 @@ export interface AppConfig {
   telegramChatID: string;
   sentry_dsn: string;
   updateCount: number;
-  aiModel: string;
+  classifierModel: string;
+  summaryModel: string;
   aiPrompt: string;
   classifierPrompt: string;
   classifierMaxBodyChars: number;
@@ -184,7 +185,10 @@ export default function config(env: Env): AppConfig {
     telegramToken: env.TELEGRAM_TOKEN,
     sentry_dsn: env.SENTRY_DSN,
     updateCount: 10,
-    aiModel: "@cf/zai-org/glm-4.7-flash",
+    classifierModel: "@cf/zai-org/glm-4.7-flash",
+    // Summary on Gemma (Google) not GLM (Zhipu): GLM leaked CJK into Russian output;
+    // A/B over opennet+arxiv showed Gemma 0 CJK on 22 posts, cheaper output. See CLAUDE.md.
+    summaryModel: "@cf/google/gemma-4-26b-a4b-it",
     aiPrompt: AI_PROMPT,
     classifierPrompt: CLASSIFIER_PROMPT,
     classifierMaxBodyChars: 2000,

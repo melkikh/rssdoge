@@ -14,7 +14,8 @@ import {
 export type PipelineConfig = Pick<
   AppConfig,
   | "minBodyChars"
-  | "aiModel"
+  | "classifierModel"
+  | "summaryModel"
   | "classifierPrompt"
   | "classifierMaxBodyChars"
   | "aiPrompt"
@@ -50,6 +51,7 @@ export type PostTrace = {
     raw_output: string;
     bullets: string;
     rejected_reason?: "cjk" | "empty";
+    mixed_script?: string[];
     finish_reason?: string;
     error: string | null;
   };
@@ -173,7 +175,12 @@ export async function tracePost(
   post: Post,
   env: { AI: Ai },
   ctx: { config: PipelineConfig; sentry?: any; kv?: KV; enrichBudget?: EnrichBudget },
-  options: { skipSentry?: boolean; skipNeuronAccounting?: boolean } = {},
+  options: {
+    skipSentry?: boolean;
+    skipNeuronAccounting?: boolean;
+    classifierModel?: string;
+    summaryModel?: string;
+  } = {},
 ): Promise<PostTrace> {
   const config = ctx.config;
   const feedConfig = getFeedConfig(config.feeds, post.tag);
@@ -240,7 +247,7 @@ export async function tracePost(
   try {
     const res = await classifyPostDetailed(classifyPost, {
       ai: env.AI,
-      model: config.aiModel,
+      model: options.classifierModel ?? config.classifierModel,
       prompt: classifierPrompt,
       maxBodyChars: config.classifierMaxBodyChars,
     });
@@ -295,7 +302,7 @@ export async function tracePost(
   try {
     const res = await summarizePostDetailed(summarizePost, {
       ai: env.AI,
-      model: config.aiModel,
+      model: options.summaryModel ?? config.summaryModel,
       prompt: summaryPrompt,
       maxBodyTotal: feedConfig?.maxBodyTotal ?? config.maxBodyTotal,
       tailSize: config.tailSize,
@@ -304,6 +311,7 @@ export async function tracePost(
       raw_output: res.rawOutput,
       bullets: res.bullets,
       rejected_reason: res.rejectedReason,
+      mixed_script: res.mixedScript,
       finish_reason: res.finishReason,
       error: null,
     };

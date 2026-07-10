@@ -136,6 +136,24 @@ function logTraceBareHeaders(ctx: Ctx, post: Post, trace: PostTrace) {
   }
 }
 
+// Log-only quality signal on a sent post (not a bare header): stray Latin inside a
+// Cyrillic word. Measured now to size the problem; escalate to a summarize-retry if
+// it turns out frequent. Grouped in Glitchtip under tag reason:mixed_script. See CLAUDE.md.
+function logMixedScript(ctx: Ctx, post: Post, trace: PostTrace) {
+  const tokens = trace.summary.mixed_script;
+  if (!tokens || tokens.length === 0) return;
+  console.log(`[mixed-script] [${post.tag}] '${post.title}' tokens=${tokens.join(",")}`);
+  ctx.sentry.withScope(scope => {
+    scope.setTag("tag", post.tag);
+    scope.setTag("reason", "mixed_script");
+    scope.setExtra("title", post.title ?? "");
+    scope.setExtra("link", post.link);
+    scope.setExtra("tokens", tokens.join(", "));
+    scope.setExtra("model", ctx.config.summaryModel);
+    scope.captureException(new Error(`Summary has mixed-script tokens: ${tokens.slice(0, 5).join(", ")}`));
+  });
+}
+
 function formatDebugPost(post: Post, trace: PostTrace, config: AppConfig) {
   const category = postCategory(config, post.tag);
   return {
@@ -164,6 +182,11 @@ async function debugTagHandler(request: IRequest, env: Env, ctx: Ctx) {
   const url = new URL(request.url);
   const limitParam = parseInt(url.searchParams.get("limit") || "3", 10);
   const limit = Math.min(Math.max(limitParam || 3, 1), 20);
+
+  // Model overrides for A/B testing candidate models — ?model= swaps summarize
+  // (the CJK-prone stage), ?classifierModel= swaps classify. See CLAUDE.md.
+  const summaryModel = url.searchParams.get("model") ?? undefined;
+  const classifierModel = url.searchParams.get("classifierModel") ?? undefined;
 
   const ages = await ctx.kv.getAll();
   let since: Date;
@@ -203,6 +226,8 @@ async function debugTagHandler(request: IRequest, env: Env, ctx: Ctx) {
       const trace = await tracePost(post, env, { ...ctx, enrichBudget }, {
         skipSentry: true,
         skipNeuronAccounting: true,
+        classifierModel,
+        summaryModel,
       });
       return formatDebugPost(post, trace, ctx.config);
     }),
@@ -213,6 +238,10 @@ async function debugTagHandler(request: IRequest, env: Env, ctx: Ctx) {
     feed_url: feedUrl,
     since: since.toISOString(),
     since_source,
+    models: {
+      classifier: classifierModel ?? ctx.config.classifierModel,
+      summary: summaryModel ?? ctx.config.summaryModel,
+    },
     posts: traces,
     neurons_estimate: estimateNeurons(
       traces.map((p) => ({ pipeline: p.pipeline })),
@@ -254,6 +283,7 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
         const trace = await tracePost(post, env, { ...ctx, enrichBudget });
         await ctx.kv.addNeuronEstimate(estimateNeurons([trace]));
         logTraceBareHeaders(ctx, post, trace);
+        logMixedScript(ctx, post, trace);
         const category = postCategory(ctx.config, post.tag);
         parts.push({ post, text: createPostMarkdown(post, trace.bullets, category) });
         if (feedFor(ctx.config, post.tag)?.dedup === "link") {

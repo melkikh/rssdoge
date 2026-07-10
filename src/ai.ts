@@ -2,6 +2,7 @@ export type SummaryResult = {
   bullets: string;
   finishReason: string | undefined;
   rejectedReason?: "cjk" | "empty";
+  mixedScript?: string[];
 };
 
 export type Classification = "PASS" | "SKIP" | "UNKNOWN";
@@ -45,6 +46,20 @@ function hasTooManyCJK(text: string, threshold = 2): boolean {
     if (isCJK && ++count >= threshold) return true;
   }
   return false;
+}
+
+// Stray Latin inside an otherwise-Cyrillic word (e.g. "состtированные") — a model glitch
+// the CJK check can't see. Signal = one pure-letter run (\p{L}+, so apostrophes/hyphens/
+// digits are separators) mixing both scripts. Legit mixes are split by those separators
+// ("patch'а", "MCP-сервер", "IPv6"), so they don't trip it. Log-only, never drops. See CLAUDE.md.
+const CYRILLIC_RE = /\p{Script=Cyrillic}/u;
+const LATIN_RE = /\p{Script=Latin}/u;
+export function mixedScriptTokens(text: string): string[] {
+  const hits: string[] = [];
+  for (const tok of text.match(/\p{L}+/gu) ?? []) {
+    if (CYRILLIC_RE.test(tok) && LATIN_RE.test(tok)) hits.push(tok);
+  }
+  return hits;
 }
 
 function stripMarkdown(text: string): string {
@@ -115,5 +130,12 @@ export async function summarizePostDetailed(
   const choice = result?.choices?.[0];
   const rawOutput = extractContent(result);
   const { bullets, rejectedReason } = sanitizeBullets(rawOutput, { cjkThreshold });
-  return { bullets, finishReason: choice?.finish_reason, rejectedReason, rawOutput };
+  const mixed = bullets ? mixedScriptTokens(bullets) : [];
+  return {
+    bullets,
+    finishReason: choice?.finish_reason,
+    rejectedReason,
+    mixedScript: mixed.length ? mixed : undefined,
+    rawOutput,
+  };
 }

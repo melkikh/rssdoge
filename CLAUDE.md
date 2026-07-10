@@ -54,7 +54,7 @@ OpenAI-style models (e.g. `@cf/zai-org/glm-4.7-flash`) return `result.choices[0]
 
 ### Two-step LLM pipeline: classify → summarize
 
-For each post with a non-empty `body`, `tracePost()` (`src/pipeline.ts`) runs `classifyPostDetailed()` first (`max_completion_tokens: 10`, one token `PASS`/`SKIP`), then — only if not `SKIP` — `summarizePostDetailed()`. Both take an options object (`{ ai, model, prompt, ... }`). Same model (GLM), different prompts. **Prompt pair is chosen per feed** via `resolvePrompts(config, tag)`: a feed whose entry sets `prompts: "whitepaper"` (only arXiv today) gets `whitepaperClassifierPrompt` / `whitepaperPrompt`; the default (`prompts: "news"`) gets `classifierPrompt` / `aiPrompt`. More reliable than one hybrid prompt: a small focused classifier task vs. a large multi-task summary.
+For each post with a non-empty `body`, `tracePost()` (`src/pipeline.ts`) runs `classifyPostDetailed()` first (`max_completion_tokens: 10`, one token `PASS`/`SKIP`), then — only if not `SKIP` — `summarizePostDetailed()`. Both take an options object (`{ ai, model, prompt, ... }`). **Two models, split by stage** (`config.ts`): `classifierModel` = GLM (`@cf/zai-org/glm-4.7-flash` — CJK is irrelevant for a one-token `PASS`/`SKIP`), `summaryModel` = Gemma (`@cf/google/gemma-4-26b-a4b-it`). The debug endpoint can override either per-run (`?model=` for summary, `?classifierModel=`) for A/B testing. **Prompt pair is chosen per feed** via `resolvePrompts(config, tag)`: a feed whose entry sets `prompts: "whitepaper"` (only arXiv today) gets `whitepaperClassifierPrompt` / `whitepaperPrompt`; the default (`prompts: "news"`) gets `classifierPrompt` / `aiPrompt`. More reliable than one hybrid prompt: a small focused classifier task vs. a large multi-task summary.
 
 The classifier returns `PASS` / `SKIP` / `UNKNOWN`. On `UNKNOWN` — fall through to summary (don't drop the post) + warning in Glitchtip. `SKIP` is sent silently as a bare header (by design; add logging behind a flag if you want visibility into false-positive skips).
 
@@ -81,6 +81,14 @@ After `ai.run`, the result goes through `sanitizeBullets()`:
 - `normalizeBullets` — adds `- ` prefix to each non-empty line if the model forgot the format.
 
 On rejection (CJK), `SummaryResult.rejectedReason = "cjk"` — this tag goes to Glitchtip as a warning to track frequency.
+
+**Why Gemma for summary.** CJK bleed into the Russian output is a trait of Chinese-origin models; GLM (Zhipu) did it (~3 rejects / 2 days in prod). An A/B via the debug endpoint (`?model=`) over `opennet` (Russian source) + `arxiv_cscr` (English) showed `@cf/google/gemma-4-26b-a4b-it` at **0 CJK across 22 posts** with clean Russian and cheaper output neurons, so `summaryModel` moved to it. `mistral-small-3.1-24b` and `qwen3-30b-a3b-fp8` were rejected: both return **empty content** with the current `ai.run` params / `extractContent` (Mistral: response shape; Qwen3: reasoning eats the completion) — they'd need integration work before being viable. The sanitizer stays regardless — model-agnostic insurance that now simply idles.
+
+### Mixed-script detector (`mixedScriptTokens`) — log-only
+
+Separate from CJK: catches a stray Latin letter inside an otherwise-Cyrillic word (e.g. Gemma once wrote `состtированные`) — a token-level model glitch the CJK check can't see. Signal = one pure-letter run (`\p{L}+`, so apostrophes/hyphens/digits are separators) that mixes both scripts. Legit domain mixing is always split by those separators (`patch'а`, `MCP-сервер`, `IPv6`, `Log4j`), so it doesn't trip. `summarizePostDetailed` runs it on the final `bullets` and returns `mixedScript?: string[]`; `logMixedScript()` (`src/index.ts`) reports it to Glitchtip under tag `reason:mixed_script`.
+
+**Deliberately log-only — never drops or alters the summary.** Stripping the stray char can't recover the real word, and dropping a whole readable summary for one cosmetic glitch is too harsh. Purpose now is to **measure frequency** (`bytag reason` → `mixed_script`); escalate to a one-shot summarize-retry only if it proves common.
 
 ### KV cursor (date) vs link-dedup — chosen by the `dedup` flag
 

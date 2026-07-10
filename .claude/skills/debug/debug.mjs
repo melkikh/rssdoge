@@ -9,13 +9,15 @@ function die(msg) {
 }
 
 function parseArgs(argv) {
-  const flags = { json: false, since: null, limit: null };
+  const flags = { json: false, since: null, limit: null, model: null, classifierModel: null };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") flags.json = true;
     else if (a === "--since") flags.since = argv[++i];
     else if (a === "--limit") flags.limit = argv[++i];
+    else if (a === "--model") flags.model = argv[++i];
+    else if (a === "--classifier-model") flags.classifierModel = argv[++i];
     else positional.push(a);
   }
   return { flags, positional };
@@ -25,6 +27,9 @@ function printHuman(data) {
   console.log(
     `tag=${data.tag}  since=${data.since} (${data.since_source})  posts=${data.posts.length}  neurons~${data.neurons_estimate}`,
   );
+  if (data.models) {
+    console.log(`models: classify=${data.models.classifier}  summary=${data.models.summary}`);
+  }
   console.log();
 
   data.posts.forEach((p, i) => {
@@ -49,7 +54,7 @@ async function main() {
 
   if (cmd !== "tag" || !tag) {
     die(
-      "usage: node debug.mjs tag <feed_tag> [--since ISO] [--limit N] [--json]\n" +
+      "usage: node debug.mjs tag <feed_tag> [--since ISO] [--limit N] [--model ID] [--classifier-model ID] [--json]\n" +
         "  env: TELEGRAM_TOKEN (required), RSSDOGE_BASE_URL (optional)",
     );
   }
@@ -65,6 +70,8 @@ async function main() {
   const params = new URLSearchParams();
   if (flags.since) params.set("since", flags.since);
   if (flags.limit) params.set("limit", flags.limit);
+  if (flags.model) params.set("model", flags.model);
+  if (flags.classifierModel) params.set("classifierModel", flags.classifierModel);
 
   const qs = params.toString();
   const url = `${BASE.replace(/\/$/, "")}/debug/tag/${encodeURIComponent(tag)}${qs ? `?${qs}` : ""}`;
