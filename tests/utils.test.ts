@@ -100,6 +100,18 @@ describe("createPostMarkdown", () => {
     const md = createPostMarkdown({ title: "News", tag: "netsec", link: "https://e.com/n" }, "");
     expect(md).toBe('#netsec <a href="https://e.com/n">News</a>');
   });
+
+  it("uses displayLink for the href but not elsewhere", () => {
+    const md = createPostMarkdown(
+      { title: "Paper", tag: "arxiv_cscr", link: "https://arxiv.org/abs/123" },
+      "- bullet",
+      "whitepaper",
+      "https://arxiv.org/pdf/123.pdf",
+    );
+    expect(md).toBe(
+      '#whitepaper #arxiv_cscr <a href="https://arxiv.org/pdf/123.pdf">Paper</a>\n- bullet',
+    );
+  });
 });
 
 describe("sortDate", () => {

@@ -42,6 +42,58 @@ created: 2026-07-07
 
 **Agents:** do not create `*-plan.md`, `issues.md`, or drafts in the repo root; new local markdown only under `plans/`.
 
+## Invocation flow (cron → Telegram)
+
+How the pieces get called and where each limit/constant bites. Exact values live in **Quotas and limits** and `AppConfig` (`src/config.ts`); the diagrams annotate where they apply.
+
+**Run level** — one cron invocation:
+
+```mermaid
+flowchart TD
+    cron["cron 0,30 9-18 mon-fri — ~20 runs/day"] --> sched["scheduled(): config(env) → try processEvent catch → captureException + rethrow"]
+    sched --> read["kv.getAll() + kv.getSeen() — 2 KV reads"]
+    read --> sel
+
+    subgraph sel["feed selection → 11 feeds/run"]
+      all["feeds: 31 total"] --> samp["sampled 30 → randomMapElements(updateCount=10)"]
+      all --> aw["alwaysRun 1: arXiv"]
+    end
+
+    sel --> fetch["getContent: Promise.all — 11 × fetchFeed(timeoutMs=10000)<br/>since — link-dedup: epoch → filter seen → maxItems=10 oldest<br/>since — date: max(cursor, now − maxLookbackDays=2d)"]
+    fetch --> cap["content sorted OLDEST-first → slice(0, maxPostsPerRun=12) — HARD CAP"]
+    cap --> batch["batch loop — postsPerMessage=5"]
+    batch --> perpost["tracePost per post (see per-post diagram)"]
+    perpost --> send["chunkParts(≤ 4096 chars) → bot.sendMessage — 1 subreq/chunk"]
+    send --> fin
+
+    subgraph fin["finally — each write in its own try/catch"]
+      uv["updateValues: cursor → maxProcessedDate (now if tag fetched nothing; skip if cut by cap)"]
+      us["updateSeen: seen = (seen ∪ sent) ∩ feedLinks"]
+      ne["addNeuronEstimate(neuronDelta) — one write/run"]
+    end
+```
+
+**Per post** — inside `tracePost` (`src/pipeline.ts`); prompt pair + body limits are picked per feed:
+
+```mermaid
+flowchart TD
+    start["post (body, tag)"] --> eb{"enrichBody AND body empty/short?"}
+    eb -->|yes| enr1["fetch + AI.toMarkdown<br/>gate: pdfMaxItemsPerRun=5, neurons under 8000"]
+    eb -->|no| chk{"body?"}
+    enr1 --> chk
+    chk -->|empty| bhNo["bare header: no_body"]
+    chk -->|"len under minBodyChars=100"| bhShort["bare header: body_too_short"]
+    chk -->|ok| classify["classify — ai.run GLM<br/>max_completion_tokens=10, body ≤ classifierMaxBodyChars=2000"]
+    classify -->|SKIP| bhSkip["bare header: classified_skip (silent)"]
+    classify -->|"PASS / UNKNOWN"| eap{"enrichAfterPass OR readPdf?"}
+    eap -->|yes| enr2["fetch + AI.toMarkdown (same gate)"]
+    eap -->|no| sum["summarize — ai.run Gemma<br/>body ≤ maxBodyTotal (news 10000 / arXiv 4000), tail 1500"]
+    enr2 --> sum
+    sum --> san{"sanitizeBullets — CJK ≥ 2 or empty?"}
+    san -->|bad| bhSum["bare header: summary_cjk / summary_empty"]
+    san -->|ok| ok["send bullets — neuronDelta += 40 (classify += 2)"]
+```
+
 ## Non-obvious behavior
 
 ### `src/config.ts`: only four fields differ between prod and dev
@@ -126,12 +178,14 @@ GLM-4.7-flash and similar reasoning models default to `enable_thinking=true`. Bu
 
 ### One `feeds` map, per-feed flags
 
-There is a **single** feed map, `feeds: Record<string, FeedEntry>` (`src/config.ts`). A bare string entry is a plain news blog with all defaults; an object overrides only what differs. `FeedEntry` / `resolveFeed` / `getFeedConfig` / `feedsAsUrls` live in `src/enrich.ts`; each flag is documented inline on the type. The flags (all optional, defaults in parens): `enrichBody`, `enrichAfterPass`, `readPdf` (false); `dedup` ("date"); `prompts` ("news" | "whitepaper" | "essay", default "news"); `category` (none); `alwaysRun` (false); `maxItems` / `maxBodyTotal` (unset → `config.maxBodyTotal`). Read them anywhere via `feedFor(config, tag)` in `src/pipeline.ts`.
+There is a **single** feed map, `feeds: Record<string, FeedEntry>` (`src/config.ts`). A bare string entry is a plain news blog with all defaults; an object overrides only what differs. `FeedEntry` / `resolveFeed` / `getFeedConfig` / `feedsAsUrls` live in `src/enrich.ts`; each flag is documented inline on the type. The flags (all optional, defaults in parens): `enrichBody`, `enrichAfterPass`, `readPdf`, `pdfLink` (false); `dedup` ("date"); `prompts` ("news" | "whitepaper" | "essay", default "news"); `category` (none); `alwaysRun` (false); `maxItems` / `maxBodyTotal` (unset → `config.maxBodyTotal`). Read them anywhere via `feedFor(config, tag)` in `src/pipeline.ts`.
 
 **"whitepaper" is now exactly arXiv** — the one feed that sets `prompts: "whitepaper"` + `category: "whitepaper"` + `dedup: "link"` + `alwaysRun` + `maxItems`/`maxBodyTotal`. Nothing else is special-cased by map membership.
 
 The three feeds that override defaults:
-- **arXiv cs.CR** — **abstract-only** (`readPdf: false`). The abstract is clean author-written know-how; the full PDF via `toMarkdown` is noisy and made the model return empty summaries (`finish_reason=missing`). `arxivPdfUrl()`/`readPdf` still exist but are unused by default — re-enable only with a fallback for empty output. Link-dedup + always-run + oldest-first `maxItems` 10; `maxBodyTotal` 4000 (vs 10000 news); `#whitepaper` tag; research prompts.
+- **arXiv cs.CR** — **abstract-only** (`readPdf: false`). The abstract is clean author-written know-how; the full PDF via `toMarkdown` is noisy and made the model return empty summaries (`finish_reason=missing`). `arxivPdfUrl()`/`readPdf` still exist but are unused by default — re-enable only with a fallback for empty output. Link-dedup + always-run + oldest-first `maxItems` 10; `maxBodyTotal` 4000 (vs 10000 news); `#whitepaper` tag; research prompts. **`pdfLink: true`** — the Telegram anchor points at the PDF (`arxivPdfUrl`: abs→`…/pdf/<id>.pdf`), not the abs page. This is a **display-only** transform: `post.link` stays the canonical abs URL used for link-dedup (`seen`/`feedLinks`), so only `displayLink()` (`src/index.ts`) rewrites the href passed to `createPostMarkdown`. See below on preview suppression.
+
+**PDF link + Telegram preview.** `sendMessage` is text-only — it can never attach/download a file, so a PDF href can't turn into an uploaded document. The only side effect is a link-preview card, which Telegram would try to fetch/render for the PDF. So the send loop (`src/index.ts`) sets `link_preview_options: { is_disabled: true }` on any chunk containing a `pdfLink` post (`chunk.posts.some(... pdfLink)`). Chunks batch multiple posts merged across feeds, and preview options are per-message, so a chunk that mixes arXiv with a news post also loses that news post's preview — accepted (cosmetic, previews only ever showed one card per message anyway). Non-`pdfLink`-only chunks keep the default preview behavior.
 - **Google Research blog** — regular news feed (news prompts, date cursor, **no** `#whitepaper`). No body in RSS (only a category ~15 chars) → `enrichBody: true` fetches the page before classify. URL uses trailing slash `…/blog/rss/` (avoids a redirect).
 - **PortSwigger Research** — regular news feed. RSS teaser ~250 chars → `enrichAfterPass: true` fetches the full page after PASS.
 - **Bruce Schneier** (`bruce_schneier`) — `prompts: "essay"`, no enrichment (full body in RSS ~6k chars).

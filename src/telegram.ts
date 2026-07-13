@@ -7,11 +7,12 @@ export class Telegram {
     this.token = props.token;
   }
 
-  async sendMessage(message: string): Promise<void> {
+  async sendMessage(message: string, opts?: { disablePreview?: boolean }): Promise<void> {
     const data = {
       chat_id: this.chatID,
       text: message,
       parse_mode: "html",
+      ...(opts?.disablePreview ? { link_preview_options: { is_disabled: true } } : {}),
     };
     const response = await fetch(
       `https://api.telegram.org/bot${this.token}/sendMessage`,

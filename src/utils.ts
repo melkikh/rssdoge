@@ -18,11 +18,13 @@ export function createPostMarkdown(
   post: { title?: string; tag?: string; link: string },
   bullets: string,
   category?: "whitepaper",
+  // Display href only; post.link stays the canonical link used for dedup. See CLAUDE.md (pdfLink).
+  displayLink?: string,
 ): string {
   const title = escapeHtml(post.title || "");
   const tag = escapeHtml(post.tag || "");
   const categoryPrefix = category === "whitepaper" ? "#whitepaper " : "";
-  const header = `${categoryPrefix}#${tag} <a href="${escapeHtml(post.link)}">${title}</a>`;
+  const header = `${categoryPrefix}#${tag} <a href="${escapeHtml(displayLink ?? post.link)}">${title}</a>`;
   if (!bullets) return header;
   return `${header}\n${escapeHtml(bullets)}`;
 }

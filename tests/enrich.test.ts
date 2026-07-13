@@ -26,6 +26,7 @@ describe("resolveFeed", () => {
     expect(resolveFeed("https://example.com/feed.xml")).toEqual({
       url: "https://example.com/feed.xml",
       readPdf: false,
+      pdfLink: false,
       enrichBody: false,
       enrichAfterPass: false,
       dedup: "date",
@@ -49,6 +50,7 @@ describe("resolveFeed", () => {
     ).toEqual({
       url: "https://arxiv.org/rss",
       readPdf: true,
+      pdfLink: false,
       enrichBody: true,
       enrichAfterPass: false,
       dedup: "link",

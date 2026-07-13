@@ -177,6 +177,7 @@ const FEEDS_PRODUCTION: Record<string, FeedEntry> = {
   // always-run + oldest-first drain of the backlog. See CLAUDE.md.
   arxiv_cscr: {
     url: "https://rss.arxiv.org/rss/cs.CR", // abstract-only, no readPdf — see CLAUDE.md
+    pdfLink: true, // Telegram link → PDF, not the abs page (post.link stays abs for dedup)
     dedup: "link",
     prompts: "whitepaper",
     category: "whitepaper",

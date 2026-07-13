@@ -6,7 +6,7 @@ import { Telegram } from "./telegram";
 import { KV } from "./kv";
 import { fetchFeed } from "./feed";
 import type { Post } from "./feed";
-import { feedsAsUrls, resolveFeed } from "./enrich";
+import { feedsAsUrls, resolveFeed, arxivPdfUrl } from "./enrich";
 import { sortDate, createPostMarkdown, initSentry, randomMapElements, chunkParts } from "./utils";
 import { tracePost, bodyPreview, estimateNeurons, feedFor, buildCursorUpdates } from "./pipeline";
 import type { PostTrace } from "./pipeline";
@@ -29,6 +29,13 @@ function limitPosts(posts: Post[], tag: string, config: AppConfig): Post[] {
 
 function postCategory(config: AppConfig, tag: string): "whitepaper" | undefined {
   return feedFor(config, tag)?.category;
+}
+
+// Telegram href for a post: PDF for pdfLink feeds (arXiv), page otherwise.
+// post.link stays canonical (dedup); only the displayed link changes. See CLAUDE.md.
+function displayLink(config: AppConfig, post: Post): string {
+  if (!feedFor(config, post.tag)?.pdfLink) return post.link;
+  return arxivPdfUrl(post.link) ?? post.link;
 }
 
 const authMiddleware = (request: IRequest, env: Env, ctx: Ctx) => {
@@ -171,7 +178,7 @@ function formatDebugPost(post: Post, trace: PostTrace, config: AppConfig) {
     classifier: trace.classifier,
     summary: trace.summary,
     enrich: trace.enrich ?? null,
-    would_send: createPostMarkdown(post, trace.bullets, category),
+    would_send: createPostMarkdown(post, trace.bullets, category, displayLink(config, post)),
   };
 }
 
@@ -302,7 +309,7 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
         logTraceBareHeaders(ctx, post, trace);
         logMixedScript(ctx, post, trace);
         const category = postCategory(ctx.config, post.tag);
-        parts.push({ post, text: createPostMarkdown(post, trace.bullets, category) });
+        parts.push({ post, text: createPostMarkdown(post, trace.bullets, category, displayLink(ctx.config, post)) });
         if (feedFor(ctx.config, post.tag)?.dedup === "link") {
           (sentLinksByTag[post.tag] ??= []).push(post.link);
         } else {
@@ -314,8 +321,11 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
       if (parts.length === 0) continue;
 
       for (const chunk of chunkParts(parts)) {
+        // Suppress the web-page preview when a PDF link (arXiv) is in the chunk, so Telegram
+        // doesn't try to render/fetch the PDF. sendMessage can't attach files regardless.
+        const disablePreview = chunk.posts.some(p => feedFor(ctx.config, p.tag)?.pdfLink);
         try {
-          await bot.sendMessage(chunk.text);
+          await bot.sendMessage(chunk.text, { disablePreview });
         } catch (err) {
           const chunkTags = [...new Set(chunk.posts.map(p => p.tag))];
           ctx.sentry.captureException(new Error(`Failed to send message to Telegram [${chunkTags.join(', ')}]`, { cause: err }));

@@ -6,6 +6,7 @@ export type FeedEntry =
       enrichBody?: boolean;      // дотянуть страницу ДО классификации, если тело пустое/короткое (Google)
       enrichAfterPass?: boolean; // дотянуть полную страницу ПОСЛЕ PASS (тизер-only RSS: PortSwigger)
       readPdf?: boolean;         // после PASS тянуть PDF (arXiv abs→pdf); сейчас выключено, см. CLAUDE.md
+      pdfLink?: boolean;         // в Telegram давать ссылку на PDF вместо страницы статьи (arXiv abs→pdf)
       dedup?: "date" | "link";   // "date" — курсор по дате (деф.); "link" — по ссылкам (arXiv: одинаковый pubDate)
       prompts?: "news" | "whitepaper" | "essay"; // пара классификатор+суммаризатор (деф. "news"); "essay" — авторские колонки/мнения (Schneier, Venables)
       category?: "whitepaper";   // добавить тег #whitepaper в заголовок Telegram
@@ -17,6 +18,7 @@ export type FeedEntry =
 export type ResolvedFeed = {
   url: string;
   readPdf: boolean;
+  pdfLink: boolean;
   enrichBody: boolean;
   enrichAfterPass: boolean;
   dedup: "date" | "link";
@@ -32,6 +34,7 @@ export function resolveFeed(entry: FeedEntry): ResolvedFeed {
     return {
       url: entry,
       readPdf: false,
+      pdfLink: false,
       enrichBody: false,
       enrichAfterPass: false,
       dedup: "date",
@@ -42,6 +45,7 @@ export function resolveFeed(entry: FeedEntry): ResolvedFeed {
   return {
     url: entry.url,
     readPdf: entry.readPdf ?? false,
+    pdfLink: entry.pdfLink ?? false,
     enrichBody: entry.enrichBody ?? false,
     enrichAfterPass: entry.enrichAfterPass ?? false,
     dedup: entry.dedup ?? "date",
