@@ -27,6 +27,8 @@ export interface AppConfig {
   tailSize: number;
   feedTimeoutMs: number;
   postsPerMessage: number;
+  maxPostsPerRun: number;
+  maxLookbackDays: number;
   feeds: Record<string, FeedEntry>;
   whitepaperClassifierPrompt: string;
   whitepaperPrompt: string;
@@ -243,6 +245,12 @@ export default function config(env: Env): AppConfig {
     tailSize: 1500,
     feedTimeoutMs: 10000,
     postsPerMessage: 5,
+    // Hard per-run post cap — bounds subrequests (free-tier 50/invocation) so the run
+    // completes and the `finally` KV writes (cursor, seen) land. See CLAUDE.md.
+    maxPostsPerRun: 12,
+    // Cursor lookback floor: never fetch further back than this, even if the KV cursor is
+    // stale. Self-heals a frozen cursor and caps backlog snowball. See CLAUDE.md.
+    maxLookbackDays: 2,
     whitepaperClassifierPrompt: WHITEPAPER_CLASSIFIER_PROMPT,
     whitepaperPrompt: WHITEPAPER_PROMPT,
     essayClassifierPrompt: ESSAY_CLASSIFIER_PROMPT,

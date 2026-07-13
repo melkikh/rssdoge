@@ -69,14 +69,19 @@ async function getContent(
   feeds: Record<string, string>,
   ages: Record<string, string>,
   seen: Record<string, string[]>,
+  now: Date,
 ) {
   const failedTags = new Set<string>();
   // Full link set per link-dedup feed (pre-filter), used to prune KV `seen` to the feed.
   const feedLinksByTag: Record<string, string[]> = {};
+  const lookbackFloor = now.getTime() - ctx.config.maxLookbackDays * 86_400_000;
   const results = await Promise.all(
     Object.keys(feeds).map(async (tag) => {
       const linkDedup = feedFor(ctx.config, tag)?.dedup === "link";
-      const sinceDate = !linkDedup && ages[tag] ? new Date(ages[tag]) : new Date(0);
+      // Never look back further than the lookback floor: caps backlog when the KV cursor is
+      // stale (a frozen cursor otherwise snowballs into runs too big to finish). See CLAUDE.md.
+      const cursor = ages[tag] ? new Date(ages[tag]).getTime() : 0;
+      const sinceDate = linkDedup ? new Date(0) : new Date(Math.max(cursor, lookbackFloor));
       try {
         const url = feeds[tag];
         const start = performance.now();
@@ -270,8 +275,16 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
     ...randomMapElements(sampledUrls, ctx.config.updateCount),
     ...alwaysRunUrls,
   };
-  const { content, failedTags, feedLinksByTag } = await getContent(ctx, feeds, ages, seen);
+  const { content, failedTags, feedLinksByTag } = await getContent(ctx, feeds, ages, seen, now);
+  const fetchedTags = new Set(content.map((p) => p.tag));
+  // Oldest-first drain, then a hard per-run cap: bounds subrequests so the run finishes and
+  // its `finally` KV writes land. Cut posts are re-fetched next run (cursor advances only to
+  // what we processed). See CLAUDE.md.
+  content.sort((a, b) => a.date.getTime() - b.date.getTime());
+  const posts = content.slice(0, ctx.config.maxPostsPerRun);
   const sentLinksByTag: Record<string, string[]> = {};
+  // Newest post date we actually processed, per date-dedup tag → the cursor we persist.
+  const maxProcessedDate: Record<string, Date> = {};
   const enrichBudget = { remaining: ctx.config.pdfMaxItemsPerRun, spent: 0 };
   // Accumulated in memory, flushed once in `finally` — a per-post KV write here burns
   // 2 subrequests/post toward the 50/invocation cap and, uncaught, could abort the run
@@ -279,8 +292,8 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
   let neuronDelta = 0;
 
   try {
-    for (let i = 0; i < content.length; i += ctx.config.postsPerMessage) {
-      const batch = content.slice(i, i + ctx.config.postsPerMessage);
+    for (let i = 0; i < posts.length; i += ctx.config.postsPerMessage) {
+      const batch = posts.slice(i, i + ctx.config.postsPerMessage);
       const parts: { post: Post; text: string }[] = [];
 
       for (const post of batch) {
@@ -292,6 +305,9 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
         parts.push({ post, text: createPostMarkdown(post, trace.bullets, category) });
         if (feedFor(ctx.config, post.tag)?.dedup === "link") {
           (sentLinksByTag[post.tag] ??= []).push(post.link);
+        } else {
+          const prev = maxProcessedDate[post.tag];
+          if (!prev || post.date > prev) maxProcessedDate[post.tag] = post.date;
         }
       }
 
@@ -313,7 +329,7 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
     // silently prevent `updateSeen`, resending link-dedup feeds (arXiv) forever. See CLAUDE.md.
     const successfulTags = Object.keys(feeds).filter(tag => !failedTags.has(tag));
     if (successfulTags.length > 0) {
-      const updates = buildCursorUpdates(successfulTags, ctx.config, now);
+      const updates = buildCursorUpdates(successfulTags, ctx.config, now, { maxProcessedDate, fetchedTags });
       if (Object.keys(updates).length > 0) {
         try {
           await ctx.kv.updateValues(updates);

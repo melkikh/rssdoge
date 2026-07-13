@@ -159,14 +159,32 @@ describe("feedFor", () => {
 
 describe("buildCursorUpdates", () => {
   const now = new Date("2026-07-07T12:00:00Z");
+  const noneProcessed = { maxProcessedDate: {}, fetchedTags: new Set<string>() };
 
-  it("sets now for news tags", () => {
-    const updates = buildCursorUpdates(["netsec"], testConfig, now);
+  it("sets now for a news tag that fetched nothing (caught up)", () => {
+    const updates = buildCursorUpdates(["netsec"], testConfig, now, noneProcessed);
     expect(updates.netsec).toEqual(now);
   });
 
+  it("advances to the newest processed post date, not now", () => {
+    const processed = new Date("2026-07-07T09:00:00Z");
+    const updates = buildCursorUpdates(["netsec"], testConfig, now, {
+      maxProcessedDate: { netsec: processed },
+      fetchedTags: new Set(["netsec"]),
+    });
+    expect(updates.netsec).toEqual(processed);
+  });
+
+  it("leaves the cursor untouched when posts were fetched but all cut by the cap", () => {
+    const updates = buildCursorUpdates(["netsec"], testConfig, now, {
+      maxProcessedDate: {},
+      fetchedTags: new Set(["netsec"]),
+    });
+    expect(updates).not.toHaveProperty("netsec");
+  });
+
   it("excludes whitepaper tags (they dedup by link, not date)", () => {
-    const updates = buildCursorUpdates(["arxiv_cscr", "netsec"], testConfig, now);
+    const updates = buildCursorUpdates(["arxiv_cscr", "netsec"], testConfig, now, noneProcessed);
     expect(updates).not.toHaveProperty("arxiv_cscr");
     expect(updates.netsec).toEqual(now);
   });

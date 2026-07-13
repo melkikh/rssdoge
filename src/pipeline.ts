@@ -103,16 +103,29 @@ export function resolvePrompts(
   };
 }
 
-/** Date cursor (→ `now`) for date-dedup tags; link-dedup tags dedup by link instead. See CLAUDE.md. */
+/**
+ * Date cursor for date-dedup tags (link-dedup tags dedup by link, skipped here).
+ * The cursor advances only to the newest post we actually PROCESSED for a tag — not to
+ * `now` — so posts the per-run cap left unsent are re-fetched next run instead of being
+ * skipped. A tag that fetched nothing is caught up → `now`; a tag whose posts were all cut
+ * by the cap is left untouched (retry next run). See CLAUDE.md.
+ */
 export function buildCursorUpdates(
   successfulTags: string[],
   config: Pick<AppConfig, "feeds">,
   now: Date,
+  opts: { maxProcessedDate: Record<string, Date>; fetchedTags: Set<string> },
 ): Record<string, Date> {
   const updates: Record<string, Date> = {};
   for (const tag of successfulTags) {
     if (feedFor(config, tag)?.dedup === "link") continue;
-    updates[tag] = now;
+    const processed = opts.maxProcessedDate[tag];
+    if (processed) {
+      updates[tag] = processed;
+    } else if (!opts.fetchedTags.has(tag)) {
+      updates[tag] = now;
+    }
+    // else: posts fetched but none processed (cut by maxPostsPerRun) — leave cursor for retry.
   }
   return updates;
 }
