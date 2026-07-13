@@ -10,6 +10,7 @@ import { feedsAsUrls, resolveFeed, arxivPdfUrl } from "./enrich";
 import { sortDate, createPostMarkdown, initSentry, randomMapElements, chunkParts } from "./utils";
 import { tracePost, bodyPreview, estimateNeurons, feedFor, buildCursorUpdates } from "./pipeline";
 import type { PostTrace } from "./pipeline";
+import { buildTagStatuses, renderStatusHtml } from "./status";
 
 /** Cloudflare's ExecutionContext with the app singletons we attach per request/cron. */
 type Ctx = ExecutionContext & {
@@ -64,11 +65,27 @@ async function versionHandler(request: IRequest, env: Env) {
 }
 
 async function indexHandler(request: IRequest, env: Env, ctx: Ctx) {
-  const ages = await ctx.kv.getAll();
-  const tags = Object.keys(ctx.config.feeds)
-    .sort()
-    .map((tag) => ({ tag, updated_at: ages[tag] ?? null }));
-  return json({ tags });
+  const [stats, ages, seen, neuronsToday] = await Promise.all([
+    ctx.kv.getStats(),
+    ctx.kv.getAll(),
+    ctx.kv.getSeen(),
+    ctx.kv.getNeuronEstimate(),
+  ]);
+  const tags = buildTagStatuses(ctx.config, stats, ages, seen);
+
+  const url = new URL(request.url);
+  if (url.searchParams.get("format") === "json") {
+    return json({
+      last_run_at: stats?.lastRunAt ?? null,
+      today: stats?.today ?? null,
+      neurons_today: neuronsToday,
+      neuron_daily_limit: ctx.config.neuronDailyLimit,
+      tags,
+    });
+  }
+
+  const html = renderStatusHtml(env, ctx.config, stats, tags, neuronsToday);
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
 async function getContent(
@@ -289,6 +306,17 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
   // what we processed). See CLAUDE.md.
   content.sort((a, b) => a.date.getTime() - b.date.getTime());
   const posts = content.slice(0, ctx.config.maxPostsPerRun);
+  const ranTags = Object.keys(feeds).filter((t) => !failedTags.has(t));
+  const postsByTag: Record<string, { count: number; maxDate: Date }> = {};
+  for (const post of content) {
+    const prev = postsByTag[post.tag];
+    if (!prev) {
+      postsByTag[post.tag] = { count: 1, maxDate: post.date };
+    } else {
+      prev.count++;
+      if (post.date > prev.maxDate) prev.maxDate = post.date;
+    }
+  }
   const sentLinksByTag: Record<string, string[]> = {};
   // Newest post date we actually processed, per date-dedup tag → the cursor we persist.
   const maxProcessedDate: Record<string, Date> = {};
@@ -369,6 +397,11 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
         ctx.sentry.captureException(new Error("Failed to persist neuron estimate", { cause: err }));
       }
     }
+    try {
+      await ctx.kv.updateStats({ now, ranTags, postsByTag });
+    } catch (err) {
+      ctx.sentry.captureException(new Error("Failed to persist stats", { cause: err }));
+    }
   }
 }
 
@@ -376,7 +409,7 @@ const router = Router({ base: "/" });
 
 router
   .get("/version", versionHandler)
-  .get("/", authMiddleware, indexHandler)
+  .get("/", indexHandler)
   .post("/debug/tag/:tag", authMiddleware, debugTagHandler)
   .all("*", () => error(404));
 

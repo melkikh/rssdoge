@@ -1,3 +1,15 @@
+export interface FeedStat {
+  lastRunAt: string;
+  lastPostAt?: string;
+  lastPostCount?: number;
+}
+
+export interface Stats {
+  lastRunAt: string;
+  today: { date: string; runs: number };
+  feeds: Record<string, FeedStat>;
+}
+
 export class KV {
   private kv: KVNamespace;
 
@@ -64,5 +76,44 @@ export class KV {
   async canSpendNeurons(additional: number, gate: number): Promise<boolean> {
     const current = await this.getNeuronEstimate();
     return current + additional <= gate;
+  }
+
+  async getStats(): Promise<Stats | null> {
+    const stats = await this.kv.get("stats", { type: "json" });
+    return (stats as Stats | null) ?? null;
+  }
+
+  async updateStats(update: {
+    now: Date;
+    ranTags: string[];
+    postsByTag: Record<string, { count: number; maxDate: Date }>;
+  }): Promise<void> {
+    const nowISO = update.now.toISOString();
+    const todayUTC = update.now.toISOString().slice(0, 10);
+    const current = await this.getStats();
+    const stats: Stats = current ?? {
+      lastRunAt: nowISO,
+      today: { date: todayUTC, runs: 0 },
+      feeds: {},
+    };
+
+    stats.lastRunAt = nowISO;
+    if (stats.today.date !== todayUTC) {
+      stats.today = { date: todayUTC, runs: 1 };
+    } else {
+      stats.today.runs++;
+    }
+
+    for (const tag of update.ranTags) {
+      (stats.feeds[tag] ??= { lastRunAt: nowISO }).lastRunAt = nowISO;
+    }
+    for (const [tag, { count, maxDate }] of Object.entries(update.postsByTag)) {
+      const feed = stats.feeds[tag] ?? { lastRunAt: nowISO };
+      feed.lastPostAt = maxDate.toISOString();
+      feed.lastPostCount = count;
+      stats.feeds[tag] = feed;
+    }
+
+    await this.kv.put("stats", JSON.stringify(stats));
   }
 }

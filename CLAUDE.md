@@ -72,6 +72,7 @@ flowchart TD
       uv["updateValues: cursor → maxProcessedDate (now if tag fetched nothing; skip if cut by cap)"]
       us["updateSeen: seen = (seen ∪ sent) ∩ feedLinks"]
       ne["addNeuronEstimate(neuronDelta) — one write/run"]
+      st["updateStats: per-tag lastRunAt/lastPostAt + runs today — one write/run (see Status page)"]
     end
 ```
 
@@ -222,11 +223,21 @@ Resets at **00:00 UTC**. Subrequests count: `fetch(feed)`, `fetch(pdf/page)`, `b
 
 **KV neuron counter:** `KV.neuronsKey()` → `neurons:<YYYY-MM-DD>` (UTC). `addNeuronEstimate()` is called **once per cron run** — the delta is accumulated in memory across posts (`neuronDelta`) and flushed in the `finally`, not written per post. Per-post writes cost 2 subrequests each (pushing a busy arXiv run over the 50 cap) and, being uncaught inside the loop, could abort the run before the `seen` write — which is exactly how arXiv posts got resent. `canSpendNeurons()` still gates enrich before `fetch`+`toMarkdown`, but it reads the start-of-run total (in-run accumulation isn't visible until the flush); safe because per-run enrich is separately capped by `pdfMaxItemsPerRun`. Estimate only (~2 classify, ~40 summarize per post), not exact billing.
 
-**Resilient KV writes in `finally`:** the date cursor (`updateValues`), link-dedup `seen` (`updateSeen`), and neuron estimate are each wrapped in their own `try/catch` + `captureException`. They are independent — a throw in one must not skip the others. Previously all three were unguarded and sequential, so a failure in `updateValues` silently prevented `updateSeen`, resending link-dedup feeds (arXiv) indefinitely. `scheduled()` also wraps `processEvent` in a capture (then rethrows): it has no router/Toucan wrapper, so an uncaught throw there (resource limit, KV error) was otherwise invisible in Glitchtip.
+**Resilient KV writes in `finally`:** the date cursor (`updateValues`), link-dedup `seen` (`updateSeen`), neuron estimate (`addNeuronEstimate`), and status blob (`updateStats`, see **Status page** below) are each wrapped in their own `try/catch` + `captureException`. They are independent — a throw in one must not skip the others. Previously all three were unguarded and sequential, so a failure in `updateValues` silently prevented `updateSeen`, resending link-dedup feeds (arXiv) indefinitely. `scheduled()` also wraps `processEvent` in a capture (then rethrows): it has no router/Toucan wrapper, so an uncaught throw there (resource limit, KV error) was otherwise invisible in Glitchtip.
 
 **Enrich budget:** `pdfMaxItemsPerRun` (5) caps `fetch`+`toMarkdown` per cron/debug run.
 
 **Per-run post cap `maxPostsPerRun` (12) — the main subrequest guard.** After a frozen-cursor incident this is the ceiling that keeps a run under 50 subrequests. **The incident:** the date cursor (`age`) stopped advancing; because subrequest-cap throws in `ai.run`/`fetch`/`sendMessage` are *caught* (→ bare headers / `failedTags`) the loop still ran to the end, but the `finally` KV writes (`updateValues`, `updateSeen`) are *new* subrequests over the exhausted budget → they threw and nothing persisted. `seen` was never created (arXiv deduped by nothing → same 10 oldest resent every run) and `age` snowballed (stale cursor → bigger backlog → more over-budget → …). Diagnosis was slow because `scheduled()` had no error capture, so it was invisible in Glitchtip. Fixes: (1) `maxPostsPerRun` + lookback floor bound the work so runs finish in budget; (2) neuron counter batched to one write/run; (3) `finally` writes each wrapped in `try/catch`; (4) `scheduled()` wraps `processEvent` in `captureException`. When raising `maxPostsPerRun`, `updateCount`, arXiv `maxItems`, or adding enrich feeds, re-check the 50 budget: ~`updateCount`+alwaysRun fetches + (≤`maxPostsPerRun`)×(classify+summarize[+enrich]) + sends + `finally` KV.
+
+### Status page (`/`) — public HTML + `stats` KV
+
+`GET /` is a **public** (no auth) status page for eyeballing feed health and daily budget. Renders dark HTML; `?format=json` returns the same data as JSON (so skill clients don't break). Rendering + data-shaping live in `src/status.ts` (`buildTagStatuses`, `renderStatusHtml`); `indexHandler` (`src/index.ts`) only reads KV (`getStats`/`getAll`/`getSeen`/`getNeuronEstimate` in parallel) and wires them. `/debug/tag/:tag` stays authed.
+
+**Why a new `stats` KV key (not `age`).** Dead-feed detection needs *"when did this tag last actually emit a post"*, which nothing persisted before: the `age` cursor is a **bad** liveness signal — for a date-dedup feed with no new posts it advances to `now` every empty run (see **KV cursor** above), so a dead feed looks fresh. So a `stats` blob (`src/kv.ts`, `getStats`/`updateStats`) records two distinct facts per tag: `lastRunAt` (we selected + fetched it, non-failed) and `lastPostAt` (newest post date actually seen in `content`, before the per-run cap). Dead feed = `lastRunAt` recent but `lastPostAt` far in the past. Also holds `today.{date,runs}` (runs today, reset on UTC date roll). The page falls back to `age[tag]` for `lastPostAt` when `stats` has no entry yet.
+
+**Cost / write path.** `updateStats` is called **once per cron run** in the `finally` (its own `try/catch`, like the other three writes) — +1 read +1 write/run, folded into the existing budget, not per-post. `getStats` merges (read-modify-write per tag), so a run only touches tags it saw. See the 50-subrequest note in **Quotas**.
+
+**Seeding after deploy.** The key fills passively from cron within ~a day, but a one-off backfill of `lastPostAt` (fetch each feed's newest item directly, no worker/AI) can seed it immediately so stale/dead feeds show red on first load. Backfill writes only `stats` (never `age`) via `wrangler kv key put stats --path <file> --remote`; cron merges on top. (The throwaway backfill script is not kept in-repo — regenerate ad-hoc if needed.)
 
 ### Debug endpoint — pipeline dry-run
 
