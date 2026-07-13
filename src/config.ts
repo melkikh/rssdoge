@@ -132,7 +132,7 @@ const WHITEPAPER_PROMPT = `Пишешь для безопасников и ин�
 
 Формат: только пункты, каждый с новой строки, с "- "; без вступления и без финального обобщения.`;
 
-// Авторские колонки/эссе (Schneier, Venables): пропускаем мнение и ключевые идеи, техноу-хау там нет.
+// Opinion columns/essays (Schneier, Venables): capture the argument and key ideas — no technical know-how here.
 const ESSAY_CLASSIFIER_PROMPT = `Ты классификатор эссе и авторских колонок по безопасности для канала для безопасников и инженеров. Это тексты с мнением: аналитика, взгляд на индустрию, приватность, ИИ, риски, управление безопасностью.
 
 Отвечай ровно одним словом: PASS или SKIP. Без пояснений, без знаков препинания.
@@ -219,7 +219,7 @@ const FEEDS_PRODUCTION: Record<string, FeedEntry> = {
   philvenables: {
     url: "https://www.philvenables.com/blog-feed.xml",
     prompts: "essay",
-    enrichAfterPass: true, // RSS отдаёт только тизер ~500 символов — тянем полную страницу после PASS
+    enrichAfterPass: true, // RSS gives only a ~500-char teaser — fetch the full page after PASS
   },
   pilotprotocol: "https://pilotprotocol.network/blog/feed.xml",
 };

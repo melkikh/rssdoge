@@ -17,6 +17,8 @@ Technical identifiers (`KV`, `bare header`, `captureException`) stay as-is in an
 
 Keep comments minimal: only what a human can't easily infer from the code itself (a non-obvious invariant, a gotcha, why-not-the-obvious-thing). Do **not** narrate what the code does or restate design rationale in the source. Rationale, trade-offs, and "why" belong in this file (`CLAUDE.md`) — reference it from a one-line comment (`// … see CLAUDE.md`) instead of duplicating it inline.
 
+**Comments are written in English** — always, regardless of the chat language. Russian belongs only in prompt strings (`AI_PROMPT`, `CLASSIFIER_PROMPT`, … in `src/config.ts`) and test fixtures, where it's content the model consumes, not a comment.
+
 ## Local agent-loop artifacts (`plans/`)
 
 Session drafts — feature plans, backlog, "what's left" notes — **only in `plans/`**, not in the repo root. The directory is in `.gitignore`; do not commit it.

@@ -1,18 +1,18 @@
 // One feed map, one entry type. Bare string = blog with all defaults; object overrides only what differs.
 export type FeedEntry =
-  | string // блог: дедуп по дате, новостные промпты, случайная выборка, без enrichment
+  | string // blog: date dedup, news prompts, random sampling, no enrichment
   | {
       url: string;
-      enrichBody?: boolean;      // дотянуть страницу ДО классификации, если тело пустое/короткое (Google)
-      enrichAfterPass?: boolean; // дотянуть полную страницу ПОСЛЕ PASS (тизер-only RSS: PortSwigger)
-      readPdf?: boolean;         // после PASS тянуть PDF (arXiv abs→pdf); сейчас выключено, см. CLAUDE.md
-      pdfLink?: boolean;         // в Telegram давать ссылку на PDF вместо страницы статьи (arXiv abs→pdf)
-      dedup?: "date" | "link";   // "date" — курсор по дате (деф.); "link" — по ссылкам (arXiv: одинаковый pubDate)
-      prompts?: "news" | "whitepaper" | "essay"; // пара классификатор+суммаризатор (деф. "news"); "essay" — авторские колонки/мнения (Schneier, Venables)
-      category?: "whitepaper";   // добавить тег #whitepaper в заголовок Telegram
-      alwaysRun?: boolean;       // запускать каждый cron-прогон мимо случайной выборки (дренаж бэклога)
-      maxItems?: number;         // кап постов/прогон, oldest-first (дренаж при dedup по ссылкам)
-      maxBodyTotal?: number;     // override лимита тела для суммаризации (деф. config.maxBodyTotal)
+      enrichBody?: boolean;      // fetch page BEFORE classify if body is empty/short (Google)
+      enrichAfterPass?: boolean; // fetch full page AFTER PASS (teaser-only RSS: PortSwigger)
+      readPdf?: boolean;         // fetch PDF after PASS (arXiv abs→pdf); currently off, see CLAUDE.md
+      pdfLink?: boolean;         // Telegram link points at the PDF instead of the article page (arXiv abs→pdf)
+      dedup?: "date" | "link";   // "date" — date cursor (default); "link" — by links (arXiv: identical pubDate)
+      prompts?: "news" | "whitepaper" | "essay"; // classifier+summary pair (default "news"); "essay" — opinion columns (Schneier, Venables)
+      category?: "whitepaper";   // add the #whitepaper tag to the Telegram header
+      alwaysRun?: boolean;       // run on every cron invocation, bypassing random sampling (backlog drain)
+      maxItems?: number;         // cap posts/run, oldest-first (drain for link dedup)
+      maxBodyTotal?: number;     // override the body limit for summarization (default config.maxBodyTotal)
     };
 
 export type ResolvedFeed = {
