@@ -35,6 +35,7 @@ describe("resolveFeed", () => {
       alwaysRun: false,
       maxItems: undefined,
       maxBodyTotal: undefined,
+      dropOnSkip: false,
     });
   });
 
@@ -59,6 +60,7 @@ describe("resolveFeed", () => {
       alwaysRun: false,
       maxItems: undefined,
       maxBodyTotal: undefined,
+      dropOnSkip: false,
     });
   });
 });

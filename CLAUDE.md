@@ -48,6 +48,8 @@ created: 2026-07-07
 
 How the pieces get called and where each limit/constant bites. Exact values live in **Quotas and limits** and `AppConfig` (`src/config.ts`); the diagrams annotate where they apply.
 
+**Agents: keep these diagrams in sync.** Any change to the cron→Telegram flow — a new branch, a new bare-header reason, a per-feed flag that affects send/dedup, changed limits/constants — must update the relevant diagram below (Run level and/or Per post) in the same change. A stale diagram is worse than none.
+
 **Run level** — one cron invocation:
 
 ```mermaid
@@ -87,7 +89,9 @@ flowchart TD
     chk -->|empty| bhNo["bare header: no_body"]
     chk -->|"len under minBodyChars=100"| bhShort["bare header: body_too_short"]
     chk -->|ok| classify["classify — ai.run GLM<br/>max_completion_tokens=10, body ≤ classifierMaxBodyChars=2000"]
-    classify -->|SKIP| bhSkip["bare header: classified_skip (silent)"]
+    classify -->|SKIP| skipd{"dropOnSkip?"}
+    skipd -->|"yes (arXiv)"| drop["dropped — not sent<br/>(still marked seen)"]
+    skipd -->|no| bhSkip["bare header: classified_skip (silent)"]
     classify -->|"PASS / UNKNOWN"| eap{"enrichAfterPass OR readPdf?"}
     eap -->|yes| enr2["fetch + AI.toMarkdown (same gate)"]
     eap -->|no| sum["summarize — ai.run Gemma<br/>body ≤ maxBodyTotal (news 10000 / arXiv 4000), tail 1500"]
@@ -120,13 +124,19 @@ Safety net: if the summary model still outputs `__SKIP_BULLETS__` (the prompt no
 A post goes to Telegram as a bare header (`createPostMarkdown(post, "")`) in five cases:
 1. `!post.body` — feed didn't return a body;
 2. `post.body.length < minBodyChars` — body too short (e.g. reddit `[removed]` with template `[link] [comments]` ≈ 17 chars). Filtered **before** LLM calls so the model doesn't hallucinate content from the title alone;
-3. `classification === "SKIP"` — classifier filtered it out;
+3. `classification === "SKIP"` — classifier filtered it out (unless the feed sets `dropOnSkip` — see below);
 4. `sanitizeBullets` rejected the output (CJK ≥2 chars or empty after normalization);
 5. `bullets.trim() === "__SKIP_BULLETS__"` (legacy safety net).
 
 Each case is logged via `logBareHeader()`: always `console.log('[bare-header] <reason>...')` (visible in `wrangler tail`), plus — for all except `classified_skip` — `captureException` with tag `reason` (groups in Glitchtip under a single issue "Post ended as bare header"). `classified_skip` is intentionally silent — too much filtered marketing would clutter the dashboard.
 
-Do not add `continue` / skip logic: every post must reach the channel at least as a title with a link.
+By default every post reaches the channel at least as a title with a link — a bare header, not a `continue`. Whether a `classified_skip` post is worth even a bare header is a **per-feed choice**, made by the `dropOnSkip` flag (see below); the default (false) keeps the bare header. Don't hardcode skip logic in the loop — put it behind a feed flag.
+
+### `dropOnSkip` — drop classifier SKIPs instead of bare-headering them
+
+Per-feed flag (`FeedEntry` in `src/enrich.ts`, default false; currently on for `arxiv_cscr`). When a post's pipeline step is `classified_skip` **and** the feed sets `dropOnSkip`, the send loop (`src/index.ts`) does **not** push a Telegram part for it — nothing is sent, not even a bare header. Why on for arXiv: `SKIP`s there are off-topic papers, and a channel full of link-only headers is noise. Scope is `classified_skip` only, not the other four bare-header reasons (a `no_body` / `summary_cjk` / etc. post still goes out as a bare header). Any feed can opt in.
+
+**Dedup bookkeeping still runs for dropped posts.** The `sentLinksByTag` / `maxProcessedDate` update happens *before* the drop `continue`, so a dropped SKIP is still recorded in `seen` (arXiv is link-dedup) — otherwise it would be re-fetched and re-classified every run, burning neurons on the same paper forever. Debug endpoint (`/debug/tag/:tag`) is unaffected: it's a dry-run and still returns the full trace incl. `would_send` for SKIP posts.
 
 ### Summary output sanitizer (`src/ai.ts`)
 
@@ -183,7 +193,7 @@ GLM-4.7-flash and similar reasoning models default to `enable_thinking=true`. Bu
 
 There is a **single** feed map, `feeds: Record<string, FeedEntry>` (`src/config.ts`). A bare string entry is a plain news blog with all defaults; an object overrides only what differs. `FeedEntry` / `resolveFeed` / `getFeedConfig` / `feedsAsUrls` live in `src/enrich.ts`; each flag is documented inline on the type. The flags (all optional, defaults in parens): `enrichBody`, `enrichAfterPass`, `readPdf`, `pdfLink` (false); `dedup` ("date"); `prompts` ("news" | "whitepaper" | "essay", default "news"); `category` (none); `alwaysRun` (false); `maxItems` / `maxBodyTotal` (unset → `config.maxBodyTotal`). Read them anywhere via `feedFor(config, tag)` in `src/pipeline.ts`.
 
-**"whitepaper" is now exactly arXiv** — the one feed that sets `prompts: "whitepaper"` + `category: "whitepaper"` + `dedup: "link"` + `alwaysRun` + `maxItems`/`maxBodyTotal`. Nothing else is special-cased by map membership.
+**"whitepaper" is now exactly arXiv** — the one feed that sets `prompts: "whitepaper"` + `category: "whitepaper"` + `dedup: "link"` + `alwaysRun` + `maxItems`/`maxBodyTotal` + `dropOnSkip`. Nothing else is special-cased by map membership.
 
 The three feeds that override defaults:
 - **arXiv cs.CR** — **abstract-only** (`readPdf: false`). The abstract is clean author-written know-how; the full PDF via `toMarkdown` is noisy and made the model return empty summaries (`finish_reason=missing`). `arxivPdfUrl()`/`readPdf` still exist but are unused by default — re-enable only with a fallback for empty output. Link-dedup + always-run + oldest-first `maxItems` 10; `maxBodyTotal` 4000 (vs 10000 news); `#whitepaper` tag; research prompts. **`pdfLink: true`** — the Telegram anchor points at the PDF (`arxivPdfUrl`: abs→`…/pdf/<id>.pdf`), not the abs page. This is a **display-only** transform: `post.link` stays the canonical abs URL used for link-dedup (`seen`/`feedLinks`), so only `displayLink()` (`src/index.ts`) rewrites the href passed to `createPostMarkdown`. See below on preview suppression.

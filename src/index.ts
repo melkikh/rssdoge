@@ -336,14 +336,20 @@ async function processEvent(event: ScheduledController, env: Env, ctx: Ctx) {
         neuronDelta += estimateNeurons([trace]);
         logTraceBareHeaders(ctx, post, trace);
         logMixedScript(ctx, post, trace);
-        const category = postCategory(ctx.config, post.tag);
-        parts.push({ post, text: createPostMarkdown(post, trace.bullets, category, displayLink(ctx.config, post)) });
+        // Dedup bookkeeping runs regardless of whether we send: a dropped SKIP must still be
+        // marked processed, else a link-dedup feed re-classifies it every run. See CLAUDE.md.
         if (feedFor(ctx.config, post.tag)?.dedup === "link") {
           (sentLinksByTag[post.tag] ??= []).push(post.link);
         } else {
           const prev = maxProcessedDate[post.tag];
           if (!prev || post.date > prev) maxProcessedDate[post.tag] = post.date;
         }
+        // dropOnSkip feeds: a classifier SKIP is dropped, not sent as a bare header. See CLAUDE.md.
+        if (trace.pipeline.step === "classified_skip" && feedFor(ctx.config, post.tag)?.dropOnSkip) {
+          continue;
+        }
+        const category = postCategory(ctx.config, post.tag);
+        parts.push({ post, text: createPostMarkdown(post, trace.bullets, category, displayLink(ctx.config, post)) });
       }
 
       if (parts.length === 0) continue;

@@ -13,6 +13,7 @@ export type FeedEntry =
       alwaysRun?: boolean;       // run on every cron invocation, bypassing random sampling (backlog drain)
       maxItems?: number;         // cap posts/run, oldest-first (drain for link dedup)
       maxBodyTotal?: number;     // override the body limit for summarization (default config.maxBodyTotal)
+      dropOnSkip?: boolean;      // classifier SKIP → drop entirely, don't send as a bare header (arXiv); still marked seen. See CLAUDE.md
     };
 
 export type ResolvedFeed = {
@@ -27,6 +28,7 @@ export type ResolvedFeed = {
   alwaysRun: boolean;
   maxItems?: number;
   maxBodyTotal?: number;
+  dropOnSkip: boolean;
 };
 
 export function resolveFeed(entry: FeedEntry): ResolvedFeed {
@@ -40,6 +42,7 @@ export function resolveFeed(entry: FeedEntry): ResolvedFeed {
       dedup: "date",
       prompts: "news",
       alwaysRun: false,
+      dropOnSkip: false,
     };
   }
   return {
@@ -54,6 +57,7 @@ export function resolveFeed(entry: FeedEntry): ResolvedFeed {
     alwaysRun: entry.alwaysRun ?? false,
     maxItems: entry.maxItems,
     maxBodyTotal: entry.maxBodyTotal,
+    dropOnSkip: entry.dropOnSkip ?? false,
   };
 }
 

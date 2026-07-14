@@ -184,6 +184,7 @@ const FEEDS_PRODUCTION: Record<string, FeedEntry> = {
     alwaysRun: true,
     maxItems: 10,
     maxBodyTotal: 4000,
+    dropOnSkip: true,
   },
   // Research blogs that need body enrichment (RSS has no/short body) but are ordinary news feeds otherwise.
   google_research: { url: "https://research.google/blog/rss/", enrichBody: true },
@@ -219,6 +220,7 @@ const FEEDS_PRODUCTION: Record<string, FeedEntry> = {
     enrichAfterPass: true, // RSS gives only a ~500-char teaser — fetch the full page after PASS
   },
   pilotprotocol: "https://pilotprotocol.network/blog/feed.xml",
+  sysdig: "https://www.sysdig.com/blog/rss.xml",
 };
 
 const FEEDS_DEVELOPMENT: Record<string, string> = {
