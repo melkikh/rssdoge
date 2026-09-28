@@ -29,11 +29,16 @@ describe("KV neuron counter", () => {
     expect(await kv.getNeuronEstimate()).toBe(42);
   });
 
-  it("canSpendNeurons respects gate", async () => {
+});
+
+describe("KV curation state", () => {
+  it("starts with an empty versioned state and round-trips it", async () => {
     const kv = new KV({ kv: mockKvStore() as any });
-    await kv.addNeuronEstimate(7990);
-    expect(await kv.canSpendNeurons(40, 8000)).toBe(false);
-    expect(await kv.canSpendNeurons(10, 8000)).toBe(true);
+    const initial = await kv.getCurationState();
+    expect(initial).toEqual({ version: 1, candidates: [], published: [], sourceStats: {}, editions: {} });
+    initial.editions.daily = "2026-09-27";
+    await kv.putCurationState(initial);
+    expect((await kv.getCurationState()).editions.daily).toBe("2026-09-27");
   });
 });
 
@@ -81,12 +86,12 @@ describe("KV stats", () => {
   it("initializes on first update", async () => {
     const kv = new KV({ kv: mockKvStore() as any });
     const now = new Date("2026-07-13T12:00:00Z");
-    await kv.updateStats({ now, ranTags: ["opennet"], postsByTag: {} });
+    await kv.updateStats({ now, ranTags: ["blog"], postsByTag: {} });
     const stats = await kv.getStats();
     expect(stats?.lastRunAt).toBe(now.toISOString());
     expect(stats?.today).toEqual({ date: "2026-07-13", runs: 1 });
-    expect(stats?.feeds.opennet.lastRunAt).toBe(now.toISOString());
-    expect(stats?.feeds.opennet.lastPostAt).toBeUndefined();
+    expect(stats?.feeds.blog.lastRunAt).toBe(now.toISOString());
+    expect(stats?.feeds.blog.lastPostAt).toBeUndefined();
   });
 
   it("increments runs on the same UTC day", async () => {
@@ -106,6 +111,20 @@ describe("KV stats", () => {
     await kv.updateStats({ now: new Date("2026-07-14T01:00:00Z"), ranTags: [], postsByTag: {} });
     const stats = await kv.getStats();
     expect(stats?.today).toEqual({ date: "2026-07-14", runs: 1 });
+  });
+
+  it("records lastOfftopicCount for gated feeds", async () => {
+    const kv = new KV({ kv: mockKvStore() as any });
+    const now = new Date("2026-07-13T12:00:00Z");
+    await kv.updateStats({
+      now,
+      ranTags: ["arxiv_cscr"],
+      postsByTag: { arxiv_cscr: { count: 4, maxDate: now } },
+      offtopicByTag: { arxiv_cscr: 7 },
+    });
+    const stats = await kv.getStats();
+    expect(stats?.feeds.arxiv_cscr.lastOfftopicCount).toBe(7);
+    expect(stats?.feeds.arxiv_cscr.lastPostCount).toBe(4);
   });
 
   it("sets lastPostAt only for tags with posts", async () => {

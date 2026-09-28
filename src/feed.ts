@@ -12,8 +12,17 @@ export type Post = {
   date: Date;
   tag: string;
   body: string;
+  categories?: string[];
   feedRaw?: FeedRawMeta;
 };
+
+/** arXiv RSS: `<category>` is primary-first; fast-xml-parser may return string or array. */
+export function normalizeCategories(raw: unknown): string[] {
+  if (!raw) return [];
+  if (typeof raw === "string") return [raw];
+  if (Array.isArray(raw)) return raw.filter((c): c is string => typeof c === "string");
+  return [];
+}
 
 export function coerceToString(v: unknown): string {
   if (typeof v === "string") return v;
@@ -85,12 +94,13 @@ export async function fetchFeed(
         attributeNamePrefix: "@_",
       },
       getExtraEntryFields: (feedEntry) => {
-        const { link } = feedEntry as any;
+        const { link, category } = feedEntry as any;
         const { body, feedRaw } = entryBodyFromFeedEntry(
           feedEntry as Record<string, unknown>,
           maxBodyTotal,
           captureRaw,
         );
+        // arXiv also exposes announceType, dc:creator — available if needed later.
         return {
           links: Array.isArray(link)
             ? link.reduce((acc, cur) => {
@@ -102,6 +112,7 @@ export async function fetchFeed(
             : [],
           body,
           feedRaw,
+          categories: normalizeCategories(category),
         };
       },
     },
@@ -125,6 +136,7 @@ export async function fetchFeed(
       date: new Date(item.published ?? 0),
       tag: tag,
       body: (item as any).body || "",
+      categories: (item as any).categories,
       feedRaw: (item as any).feedRaw,
     };
 

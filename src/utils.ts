@@ -25,7 +25,7 @@ export function createPostMarkdown(
   const tag = escapeHtml(post.tag || "");
   const categoryPrefix = category === "whitepaper" ? "#whitepaper " : "";
   const header = `${categoryPrefix}#${tag} <a href="${escapeHtml(displayLink ?? post.link)}">${title}</a>`;
-  if (!bullets) return header;
+  if (!bullets.trim()) throw new Error("Refusing to render a post without bullets");
   return `${header}\n${escapeHtml(bullets)}`;
 }
 
@@ -90,19 +90,4 @@ export function initSentry(request: unknown, env: Env, context: ExecutionContext
     context,
     request: request as Request | undefined,
   });
-}
-
-/** Uniform Fisher–Yates pick of up to `count` entries — order of the result is random. */
-export function randomMapElements(
-  input: Record<string, string>,
-  count: number,
-): Record<string, string> {
-  const keys = Object.keys(input);
-  for (let i = keys.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [keys[i], keys[j]] = [keys[j], keys[i]];
-  }
-  const result: Record<string, string> = {};
-  for (const key of keys.slice(0, count)) result[key] = input[key];
-  return result;
 }

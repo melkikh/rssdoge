@@ -1,7 +1,11 @@
+import type { CurationState } from "./curation";
+import { emptyCurationState } from "./curation";
+
 export interface FeedStat {
   lastRunAt: string;
   lastPostAt?: string;
   lastPostCount?: number;
+  lastOfftopicCount?: number; // posts dropped by categoryPriorityFilter last run (gated feeds only)
 }
 
 export interface Stats {
@@ -73,20 +77,33 @@ export class KV {
     return next;
   }
 
-  async canSpendNeurons(additional: number, gate: number): Promise<boolean> {
-    const current = await this.getNeuronEstimate();
-    return current + additional <= gate;
-  }
-
   async getStats(): Promise<Stats | null> {
     const stats = await this.kv.get("stats", { type: "json" });
     return (stats as Stats | null) ?? null;
+  }
+
+  async getCurationState(): Promise<CurationState> {
+    const state = await this.kv.get("curation", { type: "json" });
+    if (!state || typeof state !== "object" || (state as any).version !== 1) {
+      return emptyCurationState();
+    }
+    const value = state as CurationState;
+    if (!Array.isArray(value.candidates) || !Array.isArray(value.published) || !value.editions) {
+      return emptyCurationState();
+    }
+    value.sourceStats ??= {};
+    return value;
+  }
+
+  async putCurationState(state: CurationState): Promise<void> {
+    await this.kv.put("curation", JSON.stringify(state));
   }
 
   async updateStats(update: {
     now: Date;
     ranTags: string[];
     postsByTag: Record<string, { count: number; maxDate: Date }>;
+    offtopicByTag?: Record<string, number>;
   }): Promise<void> {
     const nowISO = update.now.toISOString();
     const todayUTC = update.now.toISOString().slice(0, 10);
@@ -111,6 +128,11 @@ export class KV {
       const feed = stats.feeds[tag] ?? { lastRunAt: nowISO };
       feed.lastPostAt = maxDate.toISOString();
       feed.lastPostCount = count;
+      stats.feeds[tag] = feed;
+    }
+    for (const [tag, count] of Object.entries(update.offtopicByTag ?? {})) {
+      const feed = stats.feeds[tag] ?? { lastRunAt: nowISO };
+      feed.lastOfftopicCount = count;
       stats.feeds[tag] = feed;
     }
 

@@ -1,3 +1,6 @@
+import type { Candidate, CandidateKind, EditorialVerdict } from "./curation";
+import { parseEditorialVerdict, parseRankedIds } from "./curation";
+
 export type SummaryResult = {
   bullets: string;
   finishReason: string | undefined;
@@ -5,33 +8,76 @@ export type SummaryResult = {
   mixedScript?: string[];
 };
 
-export type Classification = "PASS" | "SKIP" | "UNKNOWN";
-
 function extractContent(result: any): string {
   return (result?.choices?.[0]?.message?.content ?? result?.response ?? "").trim();
 }
 
-export async function classifyPostDetailed(
-  post: { title: string | undefined; body: string },
+function clippedBody(body: string, max: number): string {
+  if (body.length <= max) return body;
+  const tail = Math.min(800, Math.floor(max / 4));
+  return `${body.slice(0, max - tail)}\n...\n${body.slice(-tail)}`;
+}
+
+export async function editorialGateDetailed(
+  post: { title: string | undefined; body: string; source: string; kind: CandidateKind },
   opts: { ai: Ai; model: string; prompt: string; maxBodyChars: number },
-): Promise<{ classification: Classification; rawOutput: string }> {
-  const { ai, model, prompt, maxBodyChars } = opts;
-  if (!ai) return { classification: "UNKNOWN", rawOutput: "" };
-  const bodyText = post.body ? post.body.slice(0, maxBodyChars) : "(no body)";
-  const text = `Title: ${post.title}\n\n${bodyText}`;
-  const result: any = await ai.run(model, {
+): Promise<{ verdict: EditorialVerdict | null; rawOutput: string }> {
+  const text = [
+    `Kind: ${post.kind}`,
+    `Source: ${post.source}`,
+    `Title: ${post.title ?? ""}`,
+    "",
+    clippedBody(post.body, opts.maxBodyChars),
+  ].join("\n");
+  const result: any = await opts.ai.run(opts.model, {
     messages: [
-      { role: "system", content: prompt },
+      { role: "system", content: opts.prompt },
       { role: "user", content: text },
     ],
-    max_completion_tokens: 10,
+    max_completion_tokens: 300,
     chat_template_kwargs: { enable_thinking: false },
   });
   const rawOutput = extractContent(result);
-  const raw = rawOutput.toUpperCase();
-  if (raw.includes("SKIP")) return { classification: "SKIP", rawOutput };
-  if (raw.includes("PASS")) return { classification: "PASS", rawOutput };
-  return { classification: "UNKNOWN", rawOutput };
+  return { verdict: parseEditorialVerdict(rawOutput), rawOutput };
+}
+
+export async function rankCandidatesDetailed(
+  candidates: Candidate[],
+  opts: { ai: Ai; model: string; prompt: string; maxItems: number; recentTopics?: string[] },
+): Promise<{ ids: string[] | null; rawOutput: string }> {
+  const aliases = new Map(candidates.map((candidate, index) => [`c${index + 1}`, candidate.id]));
+  const compact = candidates.map((candidate, index) => ({
+    id: `c${index + 1}`,
+    kind: candidate.kind,
+    source: candidate.source,
+    title: candidate.title,
+    topic: candidate.verdict.topic,
+    reason: candidate.verdict.reason,
+    scores: {
+      interest: candidate.verdict.interest,
+      novelty: candidate.verdict.novelty,
+      practical: candidate.verdict.practical,
+      evidence: candidate.verdict.evidence,
+    },
+    excerpt: candidate.body.slice(0, 700),
+  }));
+  const text = [
+    `Maximum: ${opts.maxItems}`,
+    `Recently published topics: ${JSON.stringify(opts.recentTopics ?? [])}`,
+    `Candidates: ${JSON.stringify(compact)}`,
+  ].join("\n");
+  const result: any = await opts.ai.run(opts.model, {
+    messages: [
+      { role: "system", content: opts.prompt },
+      { role: "user", content: text },
+    ],
+    max_completion_tokens: 400,
+    chat_template_kwargs: { enable_thinking: false },
+  });
+  const rawOutput = extractContent(result);
+  const rankedAliases = parseRankedIds(rawOutput, new Set(aliases.keys()), opts.maxItems);
+  const ids = rankedAliases?.map((alias) => aliases.get(alias)!) ?? rankedAliases;
+  return { ids, rawOutput };
 }
 
 function hasTooManyCJK(text: string, threshold = 2): boolean {

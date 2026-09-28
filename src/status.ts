@@ -1,6 +1,6 @@
 import type { AppConfig, Env } from "./config";
 import type { Stats } from "./kv";
-import { feedFor } from "./pipeline";
+import { getFeedConfig } from "./enrich";
 
 function escapeHtml(s: string): string {
   return s
@@ -35,6 +35,7 @@ export interface TagStatus {
   last_post_at: string | null;
   last_run_at: string | null;
   last_post_count: number | null;
+  offtopic_count: number | null;
   seen_count: number | null;
   freshness: Freshness;
 }
@@ -48,7 +49,7 @@ export function buildTagStatuses(
   return Object.keys(config.feeds)
     .map((tag) => {
       const feedStat = stats?.feeds[tag];
-      const feed = feedFor(config, tag);
+      const feed = getFeedConfig(config.feeds, tag);
       const dedup = feed?.dedup ?? "date";
       const lastPostAt = feedStat?.lastPostAt ?? ages[tag] ?? null;
       return {
@@ -59,6 +60,7 @@ export function buildTagStatuses(
         last_post_at: lastPostAt,
         last_run_at: feedStat?.lastRunAt ?? null,
         last_post_count: feedStat?.lastPostCount ?? null,
+        offtopic_count: feedStat?.lastOfftopicCount ?? null,
         seen_count: dedup === "link" ? (seen[tag]?.length ?? 0) : null,
         freshness: freshnessBadge(lastPostAt).cls,
       };
@@ -76,6 +78,7 @@ export function renderStatusHtml(
   stats: Stats | null,
   tags: TagStatus[],
   neuronsToday: number,
+  pools: { stories: number; papers: number; last_daily: string | null; last_research: string | null },
 ): string {
   const badgeColors: Record<Freshness, string> = {
     fresh: "#3d9970",
@@ -96,6 +99,7 @@ export function renderStatusHtml(
         <td>${formatTs(t.last_post_at)}</td>
         <td>${formatTs(t.last_run_at)}</td>
         <td class="num">${t.last_post_count ?? "—"}</td>
+        <td class="num">${t.offtopic_count ?? "—"}</td>
         ${seenCol}
         <td><span class="badge" style="background:${badgeColors[badge.cls]}">${badge.label}</span></td>
       </tr>`;
@@ -138,6 +142,10 @@ export function renderStatusHtml(
   <span><strong>built</strong> ${escapeHtml(env.BUILD_TIME ?? "—")}</span>
   <span><strong>last run</strong> ${formatTs(stats?.lastRunAt)}</span>
   <span><strong>runs today</strong> ${stats?.today.runs ?? 0}</span>
+  <span><strong>story pool</strong> ${pools.stories}</span>
+  <span><strong>paper pool</strong> ${pools.papers}</span>
+  <span><strong>daily</strong> ${escapeHtml(pools.last_daily ?? "—")}</span>
+  <span><strong>research</strong> ${escapeHtml(pools.last_research ?? "—")}</span>
 </div>
 <div class="bar-wrap">
   <div class="bar-label">neurons today: ${neuronsToday} / ${config.neuronDailyLimit}</div>
@@ -145,7 +153,7 @@ export function renderStatusHtml(
 </div>
 <table>
   <thead><tr>
-    <th>tag</th><th>last post</th><th>last run</th><th>posts (last)</th><th>seen</th><th>freshness</th>
+    <th>tag</th><th>last post</th><th>last run</th><th>posts (last)</th><th>offtopic</th><th>seen</th><th>freshness</th>
   </tr></thead>
   <tbody>
 ${rows}

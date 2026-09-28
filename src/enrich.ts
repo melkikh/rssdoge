@@ -1,19 +1,21 @@
-// One feed map, one entry type. Bare string = blog with all defaults; object overrides only what differs.
+import type { Post } from "./feed";
+import type { CandidateKind, SourceTier } from "./curation";
+
 export type FeedEntry =
-  | string // blog: date dedup, news prompts, random sampling, no enrichment
+  | string
   | {
       url: string;
-      enrichBody?: boolean;      // fetch page BEFORE classify if body is empty/short (Google)
-      enrichAfterPass?: boolean; // fetch full page AFTER PASS (teaser-only RSS: PortSwigger)
-      readPdf?: boolean;         // fetch PDF after PASS (arXiv abs→pdf); currently off, see CLAUDE.md
-      pdfLink?: boolean;         // Telegram link points at the PDF instead of the article page (arXiv abs→pdf)
-      dedup?: "date" | "link";   // "date" — date cursor (default); "link" — by links (arXiv: identical pubDate)
-      prompts?: "news" | "whitepaper" | "essay"; // classifier+summary pair (default "news"); "essay" — opinion columns (Schneier, Venables)
-      category?: "whitepaper";   // add the #whitepaper tag to the Telegram header
-      alwaysRun?: boolean;       // run on every cron invocation, bypassing random sampling (backlog drain)
-      maxItems?: number;         // cap posts/run, oldest-first (drain for link dedup)
-      maxBodyTotal?: number;     // override the body limit for summarization (default config.maxBodyTotal)
-      dropOnSkip?: boolean;      // classifier SKIP → drop entirely, don't send as a bare header (arXiv); still marked seen. See CLAUDE.md
+      enrichBody?: boolean;
+      enrichAfterPass?: boolean;
+      readPdf?: boolean;
+      pdfLink?: boolean;
+      dedup?: "date" | "link";
+      maxItems?: number;
+      maxBodyTotal?: number;
+      categoryPriority?: Record<string, number>;
+      categoryPriorityThreshold?: number;
+      kind?: CandidateKind;
+      tier?: SourceTier;
     };
 
 export type ResolvedFeed = {
@@ -23,12 +25,12 @@ export type ResolvedFeed = {
   enrichBody: boolean;
   enrichAfterPass: boolean;
   dedup: "date" | "link";
-  prompts: "news" | "whitepaper" | "essay";
-  category?: "whitepaper";
-  alwaysRun: boolean;
   maxItems?: number;
   maxBodyTotal?: number;
-  dropOnSkip: boolean;
+  categoryPriority?: Record<string, number>;
+  categoryPriorityThreshold?: number;
+  kind: CandidateKind;
+  tier: SourceTier;
 };
 
 export function resolveFeed(entry: FeedEntry): ResolvedFeed {
@@ -40,9 +42,8 @@ export function resolveFeed(entry: FeedEntry): ResolvedFeed {
       enrichBody: false,
       enrichAfterPass: false,
       dedup: "date",
-      prompts: "news",
-      alwaysRun: false,
-      dropOnSkip: false,
+      kind: "story",
+      tier: "core",
     };
   }
   return {
@@ -52,19 +53,31 @@ export function resolveFeed(entry: FeedEntry): ResolvedFeed {
     enrichBody: entry.enrichBody ?? false,
     enrichAfterPass: entry.enrichAfterPass ?? false,
     dedup: entry.dedup ?? "date",
-    prompts: entry.prompts ?? "news",
-    category: entry.category,
-    alwaysRun: entry.alwaysRun ?? false,
     maxItems: entry.maxItems,
     maxBodyTotal: entry.maxBodyTotal,
-    dropOnSkip: entry.dropOnSkip ?? false,
+    categoryPriority: entry.categoryPriority,
+    categoryPriorityThreshold: entry.categoryPriorityThreshold,
+    kind: entry.kind ?? "story",
+    tier: entry.tier ?? "core",
   };
 }
 
-export function feedsAsUrls(feeds: Record<string, FeedEntry>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(feeds).map(([tag, entry]) => [tag, resolveFeed(entry).url]),
-  );
+export function primaryCategoryWeight(
+  category: string | undefined,
+  priorityMap: Record<string, number>,
+): number {
+  if (!category) return 0;
+  return priorityMap[category] ?? 0;
+}
+
+/** Deterministic pre-LLM gate: keep posts whose primary category meets the weight threshold. */
+export function categoryPriorityFilter(posts: Post[], feed: ResolvedFeed): Post[] {
+  if (!feed.categoryPriority) return posts;
+  const threshold = feed.categoryPriorityThreshold ?? 0;
+  return posts.filter((post) => {
+    const weight = primaryCategoryWeight(post.categories?.[0], feed.categoryPriority!);
+    return weight >= threshold;
+  });
 }
 
 export function getFeedConfig(

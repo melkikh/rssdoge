@@ -15,4 +15,4 @@ kv_namespaces = [
 binding = "AI"
 
 [triggers]
-crons = ["0,30 9-18 * * mon-fri"]
+crons = ["0 8,12,16 * * mon-fri"]

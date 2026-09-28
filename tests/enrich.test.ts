@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   arxivPdfUrl,
+  categoryPriorityFilter,
   documentNameFromUrl,
   enrichTargetUrl,
+  primaryCategoryWeight,
   resolveFeed,
   trySpendEnrichBudget,
-  feedsAsUrls,
 } from "../src/enrich";
+import type { Post } from "../src/feed";
 import { KV } from "../src/kv";
 
 describe("arxivPdfUrl", () => {
@@ -30,12 +32,12 @@ describe("resolveFeed", () => {
       enrichBody: false,
       enrichAfterPass: false,
       dedup: "date",
-      prompts: "news",
-      category: undefined,
-      alwaysRun: false,
       maxItems: undefined,
       maxBodyTotal: undefined,
-      dropOnSkip: false,
+      categoryPriority: undefined,
+      categoryPriorityThreshold: undefined,
+      kind: "story",
+      tier: "core",
     });
   });
 
@@ -46,7 +48,7 @@ describe("resolveFeed", () => {
         readPdf: true,
         enrichBody: true,
         dedup: "link",
-        prompts: "whitepaper",
+        kind: "paper",
       }),
     ).toEqual({
       url: "https://arxiv.org/rss",
@@ -55,12 +57,12 @@ describe("resolveFeed", () => {
       enrichBody: true,
       enrichAfterPass: false,
       dedup: "link",
-      prompts: "whitepaper",
-      category: undefined,
-      alwaysRun: false,
       maxItems: undefined,
       maxBodyTotal: undefined,
-      dropOnSkip: false,
+      categoryPriority: undefined,
+      categoryPriorityThreshold: undefined,
+      kind: "paper",
+      tier: "core",
     });
   });
 });
@@ -97,20 +99,6 @@ describe("trySpendEnrichBudget", () => {
   });
 });
 
-describe("feedsAsUrls", () => {
-  it("extracts URLs from mixed entries", () => {
-    expect(
-      feedsAsUrls({
-        arxiv: { url: "https://arxiv.org/rss", readPdf: true },
-        elastic: "https://elastic.co/feed.xml",
-      }),
-    ).toEqual({
-      arxiv: "https://arxiv.org/rss",
-      elastic: "https://elastic.co/feed.xml",
-    });
-  });
-});
-
 describe("KV.neuronsKey", () => {
   it("uses UTC date", () => {
     expect(KV.neuronsKey(new Date("2026-07-07T23:00:00Z"))).toBe("neurons:2026-07-07");
@@ -124,5 +112,50 @@ describe("documentNameFromUrl", () => {
 
   it("derives html name from path", () => {
     expect(documentNameFromUrl("https://example.com/blog/my-post", "page")).toBe("my-post.html");
+  });
+});
+
+describe("primaryCategoryWeight", () => {
+  const map = { "cs.CR": 3, "cs.LG": 3, "cs.SE": 2 };
+
+  it("returns mapped weight for known categories", () => {
+    expect(primaryCategoryWeight("cs.LG", map)).toBe(3);
+  });
+
+  it("returns 0 for unlisted categories", () => {
+    expect(primaryCategoryWeight("quant-ph", map)).toBe(0);
+  });
+});
+
+describe("categoryPriorityFilter", () => {
+  const feed = resolveFeed({
+    url: "https://arxiv.org/rss",
+    categoryPriority: { "cs.CR": 3, "cs.LG": 3, "cs.SE": 2 },
+    categoryPriorityThreshold: 2,
+  });
+
+  const post = (categories: string[]): Post => ({
+    title: "t",
+    link: `https://arxiv.org/abs/${categories[0]}`,
+    date: new Date(),
+    tag: "arxiv_cscr",
+    body: "x".repeat(200),
+    categories,
+  });
+
+  it("keeps posts whose primary category meets the threshold", () => {
+    const kept = categoryPriorityFilter([post(["cs.LG", "cs.CR"]), post(["cs.SE"])], feed);
+    expect(kept.map((p) => p.categories![0])).toEqual(["cs.LG", "cs.SE"]);
+  });
+
+  it("drops posts with unlisted primary categories", () => {
+    const kept = categoryPriorityFilter([post(["quant-ph"]), post(["eess.SP"])], feed);
+    expect(kept).toEqual([]);
+  });
+
+  it("is a no-op when categoryPriority is unset", () => {
+    const plain = resolveFeed("https://example.com/feed.xml");
+    const posts = [post(["quant-ph"])];
+    expect(categoryPriorityFilter(posts, plain)).toBe(posts);
   });
 });

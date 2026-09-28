@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coerceToString, entryBodyFromFeedEntry } from "../src/feed";
+import { coerceToString, entryBodyFromFeedEntry, normalizeCategories } from "../src/feed";
 
 // Shape from feed-extractor for arXiv cs.CR RSS entries (abstract in description)
 const arxivEntry = {
@@ -8,6 +8,8 @@ const arxivEntry = {
   published: "2026-07-06T18:00:00Z",
   description:
     "We present a layered defense architecture for LLM-based agents that combines input sanitization, tool-call sandboxing, and runtime policy enforcement. Our evaluation on three real-world agent workflows shows a 94% reduction in successful prompt-injection attacks while preserving task completion rates. We release an open-source reference implementation and discuss deployment trade-offs for production systems.",
+  category: ["cs.CR", "cs.AI"],
+  "arxiv:announce_type": "cross",
 };
 
 // Shape produced by feed-extractor + fast-xml-parser for tests/fixtures/schneier-atom.xml
@@ -51,5 +53,19 @@ describe("entryBodyFromFeedEntry", () => {
     expect(body).toContain("prompt-injection");
     expect(body).toContain("layered defense");
     expect(feedRaw?.source_field).toBe("description");
+  });
+});
+
+describe("normalizeCategories", () => {
+  it("keeps primary-first from arXiv cross-list shape", () => {
+    expect(normalizeCategories(arxivEntry.category)).toEqual(["cs.CR", "cs.AI"]);
+  });
+
+  it.each([
+    ["single string", "quant-ph", ["quant-ph"]],
+    ["empty", undefined, []],
+    ["filters non-strings", [1, "cs.LG", null], ["cs.LG"]],
+  ] as const)("handles %s", (_label, input, expected) => {
+    expect(normalizeCategories(input)).toEqual(expected);
   });
 });

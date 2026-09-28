@@ -48,15 +48,15 @@ describe("chunkParts", () => {
 });
 
 describe("createPostMarkdown", () => {
-  it("renders a bare header with no bullets", () => {
-    const md = createPostMarkdown({ title: "Hi", tag: "sec", link: "https://e.com/p" }, "");
-    expect(md).toBe('#sec <a href="https://e.com/p">Hi</a>');
+  it("refuses to render a bare header", () => {
+    expect(() => createPostMarkdown({ title: "Hi", tag: "sec", link: "https://e.com/p" }, ""))
+      .toThrow("without bullets");
   });
 
   it("escapes HTML in title and & in the href", () => {
     const md = createPostMarkdown(
       { title: "A & B <x>", tag: "sec", link: "https://e.com/?a=1&b=2" },
-      "",
+      "- detail",
     );
     expect(md).toContain("A &amp; B &lt;x&gt;");
     expect(md).toContain('href="https://e.com/?a=1&amp;b=2"');
@@ -65,7 +65,7 @@ describe("createPostMarkdown", () => {
   it("escapes a double-quote in the href so the anchor can't break", () => {
     const md = createPostMarkdown(
       { title: "t", tag: "sec", link: 'https://e.com/"onmouseover=x' },
-      "",
+      "- detail",
     );
     expect(md).toContain("&quot;onmouseover=x");
     expect(md).not.toMatch(/href="[^"]*"[^>]*"/); // no stray unescaped quote inside the attr
@@ -87,18 +87,9 @@ describe("createPostMarkdown", () => {
     );
   });
 
-  it("marks bare-header whitepaper posts with category prefix", () => {
-    const md = createPostMarkdown(
-      { title: "Paper", tag: "arxiv_cscr", link: "https://arxiv.org/abs/123" },
-      "",
-      "whitepaper",
-    );
-    expect(md).toBe('#whitepaper #arxiv_cscr <a href="https://arxiv.org/abs/123">Paper</a>');
-  });
-
   it("leaves blog posts without category prefix", () => {
-    const md = createPostMarkdown({ title: "News", tag: "netsec", link: "https://e.com/n" }, "");
-    expect(md).toBe('#netsec <a href="https://e.com/n">News</a>');
+    const md = createPostMarkdown({ title: "News", tag: "blog", link: "https://e.com/n" }, "- detail");
+    expect(md).toBe('#blog <a href="https://e.com/n">News</a>\n- detail');
   });
 
   it("uses displayLink for the href but not elsewhere", () => {

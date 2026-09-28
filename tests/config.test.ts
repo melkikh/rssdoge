@@ -7,36 +7,43 @@ const env = { ENVIRONMENT: "production", TELEGRAM_TOKEN: "t", SENTRY_DSN: "d" } 
 describe("config feeds", () => {
   const c = config(env);
 
+  it("uses a model specialized for each editorial stage", () => {
+    expect(c.gateModel).toBe("@cf/zai-org/glm-4.7-flash");
+    expect(c.rankModel).toBe("@cf/nvidia/nemotron-3-120b-a12b");
+    expect(c.summaryModel).toBe("@cf/google/gemma-4-26b-a4b-it");
+  });
+
   it("Elastic is a plain news feed (string entry, all defaults)", () => {
     expect(c.feeds).toHaveProperty("elastic_security_labs");
     const f = resolveFeed(c.feeds.elastic_security_labs);
     expect(f.dedup).toBe("date");
-    expect(f.prompts).toBe("news");
-    expect(f.category).toBeUndefined();
+    expect(f.kind).toBe("story");
+    expect(f.tier).toBe("core");
   });
 
-  it("arXiv is the only #whitepaper: link-dedup, research prompts, always-run, no PDF enrich", () => {
+  it("puts arXiv in the paper lane with link dedup and no PDF enrichment", () => {
     const f = resolveFeed(c.feeds.arxiv_cscr);
     expect(f.readPdf).toBe(false);
     expect(f.dedup).toBe("link");
-    expect(f.prompts).toBe("whitepaper");
-    expect(f.category).toBe("whitepaper");
-    expect(f.alwaysRun).toBe(true);
+    expect(f.kind).toBe("paper");
     expect(f.maxItems).toBeGreaterThan(0);
     expect(f.maxBodyTotal).toBeGreaterThan(0);
+    expect(f.categoryPriorityThreshold).toBe(2);
+    expect(f.categoryPriority?.["cs.CR"]).toBe(3);
   });
 
-  it("google_research is a news feed with body enrichment, trailing-slash RSS", () => {
-    const f = resolveFeed(c.feeds.google_research);
-    expect(f.url).toBe("https://research.google/blog/rss/");
-    expect(f.enrichBody).toBe(true);
-    expect(f.prompts).toBe("news");
-    expect(f.category).toBeUndefined();
+  it("keeps Phil Venables as analysis and removes the noisy source set", () => {
+    expect(resolveFeed(c.feeds.philvenables).kind).toBe("analysis");
+    expect(resolveFeed(c.feeds.philvenables).enrichAfterPass).toBe(true);
+    for (const removed of [
+      "bruce_schneier", "netsec", "opennet", "google_research", "meta_engineering",
+      "google_security", "rapid7", "tailscale", "teleport", "okta_security", "sysdig",
+      "cloudflare_security", "badprivacy",
+    ]) expect(c.feeds).not.toHaveProperty(removed);
   });
 
-  it("portswigger_research is a news feed with after-pass enrichment, no #whitepaper", () => {
-    const f = resolveFeed(c.feeds.portswigger_research);
-    expect(f.enrichAfterPass).toBe(true);
-    expect(f.category).toBeUndefined();
+  it("adds HN and Lobsters only as discovery sources", () => {
+    expect(resolveFeed(c.feeds.hackernews_security).tier).toBe("discovery");
+    expect(resolveFeed(c.feeds.lobsters_security).tier).toBe("discovery");
   });
 });
