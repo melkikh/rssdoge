@@ -49,6 +49,14 @@ describe("editorial verdict", () => {
     expect(parseEditorialVerdict("KEEP")).toBeNull();
   });
 
+  it("extracts one wrapped JSON object without relaxing verdict validation", () => {
+    const json = JSON.stringify(verdict);
+    expect(parseEditorialVerdict(`Result:\n\`\`\`json\n${json}\n\`\`\``)).toEqual(verdict);
+    expect(parseEditorialVerdict(`<think>brief check</think>\n${json}`)).toEqual(verdict);
+    expect(parseEditorialVerdict(`${json}\n${json}`)).toBeNull();
+    expect(parseEditorialVerdict(`Result: ${json.slice(0, -1)}`)).toBeNull();
+  });
+
   it.each([
     ["story", { ...verdict, novelty: 3 }, true],
     ["paper", { ...verdict, practical: 3 }, false],
@@ -111,6 +119,7 @@ describe("rank result and editions", () => {
   it("accepts NONE and rejects unknown, duplicate, or too many ids", () => {
     const allowed = new Set(["a", "b"]);
     expect(parseRankedIds('{"ids":[]}', allowed, 2)).toEqual([]);
+    expect(parseRankedIds('<think>done</think>\n```json\n{"ids":["a"]}\n```', allowed, 2)).toEqual(["a"]);
     expect(parseRankedIds('{"ids":["x"]}', allowed, 2)).toBeNull();
     expect(parseRankedIds('{"ids":["a","a"]}', allowed, 2)).toBeNull();
     expect(parseRankedIds('{"ids":["a","b"]}', allowed, 1)).toBeNull();

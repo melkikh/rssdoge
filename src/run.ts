@@ -271,7 +271,7 @@ export async function ingest(
       if (!gate.verdict) {
         sourceStats[post.tag].invalid++;
         processingFailedTags.add(post.tag);
-        capture(ctx, `Editorial gate returned invalid JSON for '${post.title}' [${post.tag}]`, gate.rawOutput);
+        capture(ctx, `Editorial gate returned an invalid verdict for '${post.title}' [${post.tag}]`, gate.rawOutput);
         continue;
       }
       markProcessed();

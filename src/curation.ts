@@ -92,7 +92,43 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
       ? value as Record<string, unknown>
       : null;
   } catch {
-    return null;
+    // Some models wrap an otherwise valid answer in prose, markdown, or reasoning tags.
+    // Accept exactly one complete object; ambiguous or malformed output stays fail-closed.
+    const objects: Record<string, unknown>[] = [];
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < trimmed.length; i++) {
+      const char = trimmed[i];
+      if (start < 0) {
+        if (char === "{") {
+          start = i;
+          depth = 1;
+        }
+        continue;
+      }
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === "{") depth++;
+      else if (char === "}" && --depth === 0) {
+        try {
+          const value = JSON.parse(trimmed.slice(start, i + 1));
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            objects.push(value as Record<string, unknown>);
+          }
+        } catch {
+          // Keep scanning: a later complete object may still be the model's answer.
+        }
+        start = -1;
+      }
+    }
+    return objects.length === 1 ? objects[0] : null;
   }
 }
 

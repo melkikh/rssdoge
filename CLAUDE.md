@@ -47,7 +47,7 @@ Candidate kinds:
 - `paper`: arXiv research, held for the Friday edition;
 - `analysis`: Phil Venables only; requires a non-obvious thesis and concrete security consequences, not generic thought leadership.
 
-The gate returns validated JSON with `decision`, four 1–5 scores, `topic`, and `reason`. Invalid JSON is fail-closed. A kept story needs `interest >= 4`, `evidence >= 3`, and either `novelty >= 4` or `practical >= 4`. Papers and analysis have stricter kind-specific floors in `passesQualityFloor()`.
+The gate returns validated JSON with `decision`, four 1–5 scores, `topic`, and `reason`. The parser tolerates prose, markdown, or reasoning tags around exactly one complete JSON object, but malformed, ambiguous, or schema-invalid output is fail-closed. A kept story needs `interest >= 4`, `evidence >= 3`, and either `novelty >= 4` or `practical >= 4`. Papers and analysis have stricter kind-specific floors in `passesQualityFloor()`.
 
 ## Invocation flow
 
